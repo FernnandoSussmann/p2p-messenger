@@ -1,0 +1,23 @@
+# P2P Messenger — Cargo workspace.
+#
+# Only crates with real content are listed as members. `core` (UI-agnostic
+# feature slices) and `app` (Tauri + Svelte shell) are added here once they
+# carry their first real code — see BLUEPRINT.MD.
+[workspace]
+resolver = "2"
+members = ["protocol"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "GPL-3.0-only"
+
+# Shared dependency versions, inherited by member crates via `<dep>.workspace = true`.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["use-std"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[profile.release]
+strip = true
