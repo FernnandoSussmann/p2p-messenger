@@ -1,8 +1,3 @@
-<!--
-This template loads automatically when you open a pull request.
-Fill in the sections and delete any that don't apply.
--->
-
 ## Summary
 
 <!-- What does this PR do, and why? Link the issue it closes: Closes #123 -->
@@ -15,7 +10,7 @@ Fill in the sections and delete any that don't apply.
 
 ## Affected crates / slices
 
-<!-- Check what this PR touches (see BLUEPRINT.MD). -->
+<!-- Check what this PR touches. -->
 
 - [ ] `protocol` — wire types / protocol version
 - [ ] `core` — identity · discovery · messaging · contacts · storage
@@ -40,6 +35,6 @@ Fill in the sections and delete any that don't apply.
 
 ## Checklist
 
-- [ ] No empty files, stub modules, or placeholder folders (per BLUEPRINT.MD)
+- [ ] No empty files, stub modules, or placeholder folders
 - [ ] No message plaintext, private keys, or secrets added to logs
 - [ ] Docs / README updated if behavior or structure changed
