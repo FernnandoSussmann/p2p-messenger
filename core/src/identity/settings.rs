@@ -3,6 +3,9 @@
 //! [`MemorySettingsStore`] is a narrow placeholder that the DD-05 slice will
 //! replace with a SQLCipher-backed store opened with the `DbKey`. It holds the
 //! display name and provisioning timestamp only, and never any secret.
+//!
+//! The `DbKey` is created before the display name is captured, so the
+//! encrypted store is already openable when the first setting is written.
 
 use std::collections::HashMap;
 use std::fmt;
