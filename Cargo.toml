@@ -5,7 +5,7 @@
 # carry their first real code — see BLUEPRINT.MD.
 [workspace]
 resolver = "2"
-members = ["protocol"]
+members = ["protocol", "core"]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,6 +18,8 @@ license = "GPL-3.0-only"
 serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["use-std"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+zeroize = { version = "1", features = ["zeroize_derive"] }
+tempfile = "3"
 
 [profile.release]
 strip = true

@@ -1,0 +1,13 @@
+//! The `identity` slice: secret hygiene, the `account_id` marker, and
+//! display-name validation.
+//!
+//! `AccountId` is a random v4 UUID. It is deliberately unrelated to any key
+//! or to the NodeId, so it reveals nothing about the user.
+
+mod display_name;
+mod marker;
+mod secret;
+
+pub use display_name::{validate_display_name, DisplayName, DisplayNameError};
+pub use marker::{read_marker, write_marker, AccountId, MarkerError};
+pub use secret::{DbKey, SecretKeyBytes};
