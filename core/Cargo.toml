@@ -10,6 +10,13 @@ license.workspace = true
 serde.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
+keyring.workspace = true
+keyring-core.workspace = true
+iroh-base.workspace = true
+qrcode.workspace = true
+
+[features]
+test-support = []
 
 [dev-dependencies]
 tempfile.workspace = true
