@@ -1,0 +1,15 @@
+[package]
+name = "core"
+description = "UI-agnostic feature slices for the p2p-messenger (identity, ...)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
