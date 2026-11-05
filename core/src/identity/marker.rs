@@ -66,10 +66,13 @@ impl From<io::Error> for MarkerError {
     }
 }
 
-/// Reads the marker at `path`. Absent file is `Ok(None)`; a present but
+/// File name of the marker inside the caller-supplied directory.
+const MARKER_FILE_NAME: &str = "account_id";
+
+/// Reads the marker in `dir`. Absent file is `Ok(None)`; a present but
 /// non-canonical file is `Err(MarkerError::Corrupt)`.
-pub fn read_marker(path: &Path) -> Result<Option<AccountId>, MarkerError> {
-    let bytes = match fs::read(path) {
+pub fn read_marker(dir: &Path) -> Result<Option<AccountId>, MarkerError> {
+    let bytes = match fs::read(dir.join(MARKER_FILE_NAME)) {
         Ok(b) => b,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(MarkerError::Io(e)),
@@ -87,29 +90,18 @@ pub fn read_marker(path: &Path) -> Result<Option<AccountId>, MarkerError> {
     Ok(Some(AccountId(uuid)))
 }
 
-/// Atomically writes the marker: temp file in the same directory, fsync,
-/// then rename into place.
-pub fn write_marker(path: &Path, id: AccountId) -> Result<(), MarkerError> {
-    let dir = match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => Path::new("."),
-    };
-    let file_name = path.file_name().ok_or_else(|| {
-        MarkerError::Io(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "marker path has no file name",
-        ))
-    })?;
-    let mut tmp_name = file_name.to_os_string();
-    tmp_name.push(".tmp");
-    let tmp_path = dir.join(tmp_name);
+/// Atomically writes the marker into `dir`: temp file in the same directory,
+/// fsync, then rename into place.
+pub fn write_marker(dir: &Path, id: AccountId) -> Result<(), MarkerError> {
+    let path = dir.join(MARKER_FILE_NAME);
+    let tmp_path = dir.join(format!("{MARKER_FILE_NAME}.tmp"));
 
     let result = (|| -> io::Result<()> {
         let mut f = fs::File::create(&tmp_path)?;
         f.write_all(id.0.hyphenated().to_string().as_bytes())?;
         f.sync_all()?;
         drop(f);
-        fs::rename(&tmp_path, path)?;
+        fs::rename(&tmp_path, &path)?;
         // Best-effort directory fsync so the rename is durable (unix).
         #[cfg(unix)]
         if let Ok(d) = fs::File::open(dir) {
@@ -130,8 +122,7 @@ mod tests {
     #[test]
     fn absent_marker_reads_none() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("account_id");
-        assert!(read_marker(&path).unwrap().is_none());
+        assert!(read_marker(dir.path()).unwrap().is_none());
     }
 
     #[test]
@@ -139,19 +130,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("account_id");
         let id = AccountId::new();
-        write_marker(&path, id).unwrap();
-        assert_eq!(read_marker(&path).unwrap(), Some(id));
+        write_marker(dir.path(), id).unwrap();
+        assert_eq!(read_marker(dir.path()).unwrap(), Some(id));
         // Trailing newline tolerated.
         fs::write(&path, format!("{}\n", id.as_uuid())).unwrap();
-        assert_eq!(read_marker(&path).unwrap(), Some(id));
+        assert_eq!(read_marker(dir.path()).unwrap(), Some(id));
     }
 
     #[test]
     fn atomic_write_leaves_no_temp_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("account_id");
-        write_marker(&path, AccountId::new()).unwrap();
-        write_marker(&path, AccountId::new()).unwrap();
+        write_marker(dir.path(), AccountId::new()).unwrap();
+        write_marker(dir.path(), AccountId::new()).unwrap();
         let names: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
             .map(|e| e.unwrap().file_name())
@@ -177,7 +167,7 @@ mod tests {
         for content in bad {
             fs::write(&path, &content).unwrap();
             assert!(
-                matches!(read_marker(&path), Err(MarkerError::Corrupt)),
+                matches!(read_marker(dir.path()), Err(MarkerError::Corrupt)),
                 "should be corrupt: {content:?}"
             );
         }
