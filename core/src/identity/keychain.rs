@@ -141,6 +141,11 @@ pub mod testing {
             Self::default()
         }
 
+        /// Whether no secret is stored.
+        pub fn is_empty(&self) -> bool {
+            self.entries.lock().unwrap().is_empty()
+        }
+
         /// Makes every later operation return the error built by `make_error`.
         pub fn fail_with(&self, make_error: fn() -> KeychainError) {
             *self.fail_with.lock().unwrap() = Some(make_error);
