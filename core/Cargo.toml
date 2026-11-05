@@ -14,9 +14,11 @@ keyring.workspace = true
 keyring-core.workspace = true
 iroh-base.workspace = true
 qrcode.workspace = true
+rand.workspace = true
 
 [features]
 test-support = []
 
 [dev-dependencies]
 tempfile.workspace = true
+core = { path = ".", features = ["test-support"] }

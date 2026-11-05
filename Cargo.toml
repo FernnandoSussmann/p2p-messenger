@@ -23,6 +23,7 @@ tempfile = "3"
 keyring = "4"
 keyring-core = "1"
 iroh-base = { version = "1", default-features = false, features = ["key"] }
+rand = "0.10"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [profile.release]

@@ -173,16 +173,16 @@ bytes** (the byte canary used by the leak guard is a non-secret test fixture, no
 
 ## Definition of Done (verifiable checklist)
 
-- [ ] First-run `provision()` generates keypair + 256-bit DB key, stores both in the keychain, writes the
+- [x] First-run `provision()` generates keypair + 256-bit DB key, stores both in the keychain, writes the
       `account_id` marker **last** — atomic w.r.t. `status()`. *(DD DoD bullet 1.)*
-- [ ] `status()`/`load()` detect and load an existing identity (the backend half of "subsequent launches …
+- [x] `status()`/`load()` detect and load an existing identity (the backend half of "subsequent launches …
       no prompt"). *(DD DoD bullet 2.)*
-- [ ] Missing/unreadable secrets → `Error` state; `provision()` refuses; never a silent re-provision. *(DD DoD bullet 3.)*
-- [ ] `set_display_name` validates and persists (first-run + edit) keyed by `account_id` via the settings
+- [x] Missing/unreadable secrets → `Error` state; `provision()` refuses; never a silent re-provision. *(DD DoD bullet 3.)*
+- [x] `set_display_name` validates and persists (first-run + edit) keyed by `account_id` via the settings
       seam. *(DD DoD bullet 4.)*
-- [ ] `my_info()` returns display name + NodeId + live ticket + QR SVG, all public. *(DD DoD bullet 5 — backend.)*
-- [ ] No secret appears in any return struct, `Debug`, or log (core slice of the leak guard passes). *(DD DoD bullet 6 — core.)*
-- [ ] Every DD "Testing" item is implemented and green: idempotence, status matrix, partial-write rollback,
+- [x] `my_info()` returns display name + NodeId + live ticket + QR SVG, all public. *(DD DoD bullet 5 — backend.)*
+- [x] No secret appears in any return struct, `Debug`, or log (core slice of the leak guard passes). *(DD DoD bullet 6 — core.)*
+- [x] Every DD "Testing" item is implemented and green: idempotence, status matrix, partial-write rollback,
       display-name validation, two-node integration, property round-trip, secret-leak guard. *(DD DoD bullet 7 — core tests.)*
-- [ ] `core::identity` is now a complete slice with real content only. *(DD DoD bullet 8.)*
-- [ ] `fmt`/`clippy -D warnings`/`test --workspace` green; no hardcoded secrets.
+- [x] `core::identity` is now a complete slice with real content only. *(DD DoD bullet 8.)*
+- [x] `fmt`/`clippy -D warnings`/`test --workspace` green; no hardcoded secrets.
