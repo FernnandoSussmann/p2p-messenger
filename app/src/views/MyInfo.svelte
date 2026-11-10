@@ -47,7 +47,7 @@
 
   onMount(() => {
     load();
-    const unlisten = listen("my_ticket_changed", refreshTicket).catch(() => () => {});
+    const unlisten = listen("my_ticket_changed", refreshTicket);
     return () => {
       unlisten.then((u) => u());
     };

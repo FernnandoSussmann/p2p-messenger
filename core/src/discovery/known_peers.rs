@@ -63,7 +63,8 @@ impl std::error::Error for KnownPeersError {
 
 const KNOWN_PEERS_FILE_NAME: &str = "known_peers.json";
 const KNOWN_PEERS_VERSION: u32 = 1;
-const MAX_KNOWN_PEERS_BYTES: u64 = 256 * 1024;
+// Sized for MAX_PEERS_PER_ACCOUNT entries with maximum-length names.
+const MAX_KNOWN_PEERS_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_PEERS_PER_ACCOUNT: usize = 10_000;
 
 #[derive(Serialize, Deserialize)]
@@ -381,7 +382,7 @@ mod tests {
     #[test]
     fn full_store_reports_full_and_stays_readable() {
         let (dir, store, account) = store();
-        let peers: BTreeMap<String, StoredPeer> = (0..2700u32)
+        let peers: BTreeMap<String, StoredPeer> = (0..10_000u32)
             .map(|i| {
                 let mut seed = [0u8; 32];
                 seed[..4].copy_from_slice(&(i + 1000).to_le_bytes());

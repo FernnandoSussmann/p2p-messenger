@@ -30,3 +30,4 @@ test-support = ["dep:tempfile"]
 tempfile.workspace = true
 core = { path = ".", features = ["test-support"] }
 iroh = { workspace = true, features = ["test-utils"] }
+tokio = { workspace = true, features = ["net", "io-util"] }

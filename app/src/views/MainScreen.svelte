@@ -8,7 +8,7 @@
   const Active = $derived(current.component);
 
   onMount(() => {
-    const started = startNetEvents().catch(() => () => {});
+    const started = startNetEvents();
     return () => {
       started.then((unlisten) => unlisten());
     };

@@ -12,10 +12,10 @@ use core::discovery::testing::{
     MemoryAddressLookup, MemoryKnownPeers, TestNode, TestOptions,
 };
 use core::discovery::{
-    event_json, ConnectError, ConnectionState, Direction, FailureReason, GateLimits, MyTicketDto,
-    NetEvent, CLOSE_PROTOCOL,
+    event_json, ConnectError, ConnectionState, Direction, FailureReason, FileKnownPeers,
+    GateLimits, MyTicketDto, NetEvent, CLOSE_PROTOCOL,
 };
-use core::identity::{KeychainStore, NodeId, Ticket};
+use core::identity::{AccountId, KeychainStore, NodeId, Ticket};
 use iroh::endpoint::ConnectionError;
 use protocol::{new_message_id, ChatMessage, Envelope, Payload};
 use tokio::sync::broadcast::Receiver;
@@ -295,7 +295,10 @@ fn pending_prompt_expires() {
 #[test]
 fn known_peer_reconnects_silently_across_restart() {
     run(async {
-        let (a, _) = node("Alice").await;
+        let known_dir = tempfile::tempdir().unwrap();
+        let known = Arc::new(FileKnownPeers::new(known_dir.path(), AccountId::new()));
+        let a =
+            spawn_test_node_with("Alice", TestOptions::default().with_known(known.clone())).await;
         let (b, _) = node("Bob").await;
         let (mut ea, mut eb) = (a.node.subscribe(), b.node.subscribe());
 
@@ -308,6 +311,7 @@ fn known_peer_reconnects_silently_across_restart() {
         )
         .await;
         let a_id = a.id();
+        assert!(known_dir.path().join("known_peers.json").is_file());
 
         let a = restart(a).await;
         assert_eq!(a.id(), a_id);

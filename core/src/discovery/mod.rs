@@ -10,21 +10,15 @@
 mod dto;
 mod events;
 mod flood;
+mod hello;
 mod known_peers;
+mod node;
+mod ticket_provider;
 
 pub use dto::{event_json, ConnectionStateDto, IncomingRequestDto, MyTicketDto};
 pub use events::{ConnectionState, Direction, FailureReason, IncomingRequest, NetEvent};
 pub use flood::{Admission, FloodGuard, GateLimits};
-pub use known_peers::{KnownPeers, KnownPeersError};
-
-// ── track A modules ──
-pub use known_peers::FileKnownPeers;
-
-// ── track B modules ──
-mod hello;
-mod node;
-mod ticket_provider;
-
+pub use known_peers::{FileKnownPeers, KnownPeers, KnownPeersError};
 pub use node::{
     ConnectError, Node, NodeConfig, NodeDeps, RelayChoice, RespondError, StartError, CLOSE_BUSY,
     CLOSE_DECLINED, CLOSE_PROTOCOL,
