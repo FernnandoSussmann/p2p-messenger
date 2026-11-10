@@ -1,0 +1,28 @@
+[package]
+name = "messenger-headless"
+description = "Test-only headless node used to simulate devices in Level-3 tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "messenger_headless"
+
+[[bin]]
+name = "messenger-headless"
+path = "src/main.rs"
+
+[dependencies]
+messenger_core = { package = "core", path = "../core" }
+protocol.workspace = true
+iroh.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "signal", "fs"] }
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+messenger_core = { package = "core", path = "../core", features = ["test-support"] }
+tempfile.workspace = true
