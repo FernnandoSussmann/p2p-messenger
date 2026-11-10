@@ -89,6 +89,8 @@ pub enum LanMode { Mdns, Off, #[cfg(any(test, feature = "test-support"))] Memory
 
 // NodeConfig gains: pub lan: LanMode   (desktop() = Mdns, loopback() = Off unless a test sets Memory)
 // NetEvent gains:   LanPeersChanged(Vec<LanPeer>)        -> Tauri "lan_peers_changed"
+// dto::event_json gains the arm: LanPeersChanged -> ("lan_peers_changed", Vec<LanPeerDto>)
+//   (exhaustive match: the build fails until this arm exists)
 // dto.rs gains:
 #[derive(Serialize)] pub struct LanPeerDto { pub node_id: String, pub display_name: Option<String>, pub verified: bool /* always false in DD-02 */, pub ticket: String }
 #[derive(Serialize)] pub struct PresenceDto { pub enabled: bool }
@@ -141,6 +143,7 @@ Owns **only** these files:
 
 Instructions:
 - **Settings:**
+  - **Documented interim deviation:** DD-02 says presence and the relay override persist "in the DD-05 settings table keyed by `account_id`". DD-05 (encrypted DB) does not exist yet, so they go into the existing per-account `FileSettingsStore` entry, the same interim store DD-01 already uses. Both values are non-secret. State this in the `settings.rs` doc comment and in the PR; DD-05 migrates them with the rest of the settings. The `account_id` keying matches the design.
   - Add `presence_enabled: Option<bool>` and `relay_url: Option<String>` to `StoredAccount` and `AccountSettings`, both with `#[serde(default)]`. Old v1 files still parse, so `SETTINGS_VERSION` stays 1.
   - Update `file_store_file_contains_no_secrets_and_only_known_keys` to the new exact key set.
   - `set_relay_url` validates with `RelayUrl::from_str`, scheme `https` (or `http` only for loopback hosts), max 2048 bytes, and stores the canonical string. Reading back an invalid stored URL → `SettingsError::Unavailable`.
@@ -178,6 +181,7 @@ Tests (`core/tests/discovery_lan.rs`, `#[tokio::test(flavor = "multi_thread")]`,
 - `refresh_local_name_republishes_after_rename`: rename while ON → the other node sees the new name via `LanPeersChanged`. Rename while OFF → nothing is published.
 - In-module unit tests for `encode_lan_name`/`decode_lan_name`/`LanPeers` (pure, in the gate): truncation on a multi-byte char boundary, oversize/non-UTF-8/bidi/control → `None`, self-filter, cap, name update without a duplicate entry, `Expired` removal.
 - Settings unit tests: presence/relay round-trip in Memory and File stores. Old v1 file without the new fields parses. Invalid relay URL rejected. Account isolation.
+- Extend the 02-01 `dto.rs` test `event_names_match_dd02_api_table` with `"lan_peers_changed"` and a JSON-shape test for `LanPeerDto` (`verified: false`, `display_name: null` when absent, `ticket` parses with `Ticket::parse`).
 
 ### Parallel track B: profile override (Level 2)
 
@@ -276,7 +280,7 @@ Owns:
    - `net_presence_set(enabled: bool) -> PresenceDto`
    - `net_lan_peers() -> Vec<LanPeerDto>`
 
-   Forward `NetEvent::LanPeersChanged` as `app.emit("lan_peers_changed", Vec<LanPeerDto>)`. Settings failure → `SettingsUnavailable`.
+   `NetEvent::LanPeersChanged` reaches the webview through 02-01's generic `event_json` forwarding loop as `"lan_peers_changed"` with `Vec<LanPeerDto>`; do not add a hard-coded emit. Extend `forwarded_event_names_are_the_dd02_names` to expect it. Settings failure → `SettingsUnavailable`.
 3. Relay override:
    - Node start reads `get_relay_url(account)` for `RelayChoice`.
    - Writer: `MESSENGER_RELAY_URL` at launch, for testers and self-hosters, documented in README. There is no GUI editor in v1.
@@ -350,6 +354,8 @@ Also run the ignored real-mDNS test once on a machine with a normal LAN interfac
 - [ ] Presence defaults ON, persists per `account_id`, and when OFF verifiably stops advertisement (tested) while browsing continues and ticket holders can still connect. The GUI copy explains "invisible ≠ unreachable".
 - [ ] The LAN pick and the pasted ticket both go through the single 02-01 trust gate.
 - [ ] The self-chosen name is carried only in the mDNS record: never in internet-published data, and withdrawn while presence is OFF (tested).
+- [ ] `lan_peers_changed` comes from core's `event_json` (tested); no event name is hard-coded in `app/src-tauri`.
+- [ ] Presence and relay override are stored per `account_id` in the interim `FileSettingsStore`; the deviation from "DD-05 settings table" is documented in code and the PR.
 - [ ] Relay override is persisted in settings, validated, applied in `ensure_started` once an account exists, and documented (tested: unset/valid/`default`/invalid). The default remains the iroh mesh.
 - [ ] Renaming re-publishes the LAN name (tested). The window title shows the profile suffix only when a profile is active (tested).
 - [ ] `--profile` / `MESSENGER_PROFILE` isolates data dir + keychain namespace. It is validated and fails closed, the default profile is unchanged, and it is documented as a dev/test affordance.

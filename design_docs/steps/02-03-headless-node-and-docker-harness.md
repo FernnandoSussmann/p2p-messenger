@@ -65,9 +65,9 @@ ctl commands (one JSON request → one JSON response line on stdout, exit code 0
   - **It is never a TCP listener.**
   - Each request is one JSON line, capped at 8 KiB, with a 5 s read timeout per connection.
   - Unknown commands → `{"ok":false,"error":"UnknownCommand"}`.
-- **Event output:** `run` also prints each event to stdout as one JSON line, `{"event":"incoming_request","payload":IncomingRequestDto}`, using the same names and payloads as the Tauri events. These lines are harness output. Diagnostics go to stderr with NodeIds only; display names never appear in stderr logs.
+- **Event output:** `run` also prints each event to stdout as one JSON line, `{"event":"incoming_request","payload":IncomingRequestDto}`, using the same names and payloads as the Tauri events. Build each line from `core::discovery::dto::event_json` (02-01), the same mapping the Tauri shell uses, so no event name is hard-coded in `headless/`. These lines are harness output. Diagnostics go to stderr with NodeIds only; display names never appear in stderr logs.
 - **Startup banner** on stderr: "TEST-ONLY headless node: throwaway identity, not for real use; secrets stored unencrypted in <dir>/keyring".
-- **Unix only.** On non-unix targets, `main` prints "messenger-headless is supported on unix only" and exits 2, so `cargo build` still succeeds workspace-wide on Windows.
+- **Unix only.** On non-unix targets, `main` prints "messenger-headless is supported on unix only" and exits 2, so `cargo build` still succeeds workspace-wide on Windows. Every integration test file under `headless/tests/` (`control.rs`, `parity.rs`) starts with `#![cfg(unix)]`, and unix-only modules (`control.rs`, `file_keychain.rs` permission code) are `#[cfg(unix)]`, so `cargo test --workspace` and `cargo clippy --all-targets` also pass on Windows.
 
 **Parity scenarios (core test-support, `core/src/discovery/testing/scenarios.rs`):**
 
@@ -102,6 +102,7 @@ This step creates the `headless` crate with real content, so the parallel tracks
 
 Owns:
 - root `Cargo.toml`: add `"headless"` to `[workspace] members`.
+- `core/Cargo.toml`: anything Track A's scenarios need beyond what 02-01 added. `serde_json` is already a normal dependency (02-01, for `event_json`); verify it, and add any other crate the `NodeDriver` scenarios use, so Track A builds without touching a manifest.
 - `headless/Cargo.toml`:
   - `messenger_core = { package = "core", path = "../core" }` with **no extra features**, plus `protocol`, `tokio`, `serde`, `serde_json`, `zeroize`, all `.workspace = true` where shared.
   - `[dev-dependencies]`: `messenger_core` with `test-support`, and `tempfile`.
@@ -158,6 +159,7 @@ Instructions:
   - `run_refuses_symlinked_socket_path`
   - `banner_says_test_only` (stderr contains "TEST-ONLY")
   - `stdout_events_contain_no_key_material`: a canary scan over captured stdout/stderr and the files in the data dir except `keyring/`.
+  - `stdout_event_names_are_the_dd02_names`: every `"event"` value on stdout during a connect/accept run is one of the names `event_json` produces.
   - Kill child processes on drop.
 
 ### Parallel track C: Docker image, compose, smoke script
@@ -207,13 +209,19 @@ Code against the CLI contract above.
   ```
 
   For N nodes, document copying a service plus its own volume. Do not use `--scale`, because scaled replicas would share one volume.
+
+  **Relay path in Level 3 (explicit scope decision).** DD-02 says that in containers "the ticket/relay path works regardless". This compose setup runs `--relay disabled` on an `internal: true` network, so the containers exercise the **ticket** path over direct addresses but **not** a relay. Relay coverage comes from the Level-1 test `core/tests/discovery_relay.rs` (relay-only connection + ciphertext canary capture), which runs the same `core` code in the mandatory gate. State this in a comment at the top of `compose.yaml` and in the README Level 3 section, so nobody assumes the containers test the relay.
 - `docker/smoke.sh`: `#!/usr/bin/env bash`, `set -euo pipefail`, executable, with a `trap` that always runs `docker compose -f docker/compose.yaml down -v --remove-orphans`. It automates DD-02 "Level 3" steps 1–4:
   1. `up -d --build`.
   2. **LAN:** poll `exec -T node-b messenger-headless ctl --data-dir /data peers` until it lists node-a's NodeId (timeout 60 s).
   3. **Ticket:** A `ticket` → B `connect <ticket>` → A `wait incoming_request` → A `respond <B> accept` → both `wait connection_state --state connected`.
   4. **Known reconnect:** `docker compose restart node-b`. The named volume keeps B's identity and known peers. Assert B's `node-id` is unchanged. B reconnects with A's ticket → A sees `connected` with **no** `incoming_request`. Check this with `wait` and a short timeout that is expected to time out.
   5. **Presence:** A `presence off` → B's `peers` no longer lists A within the mDNS expiry window (poll with a timeout; record the observed time in README) → A `presence on` → A reappears.
-  6. `down -v --remove-orphans`. Then assert both of these are empty:
+  6. **Per-container isolation** (DD-02 "tearing down a container leaves no residue in another"):
+     - A's and B's `node-id` differ, and the `account_id` in each node's marker file differs (read with `exec -T node-x cat /data/<marker file>`; use the real marker file name from `core::identity`).
+     - B's `/data` contains only B's account: `exec -T node-b ls -R /data` lists no file or keyring entry named after A's `account_id`, and the reverse for A.
+     - `docker compose rm -s -f -v node-a` (stop and remove A plus its anonymous volumes; A's named volume is removed only by the final `down -v`). Then B is still running and answers `node-id` with its unchanged NodeId, and B's `/data` listing is byte-identical to before A was removed.
+  7. `down -v --remove-orphans`. Then assert both of these are empty:
      - `docker volume ls -q --filter label=com.docker.compose.project=p2pm-harness`
      - `docker ps -a -q --filter label=com.docker.compose.project=p2pm-harness`
 
@@ -230,6 +238,7 @@ Owns:
 - `README.md`, `AGENTS.md`
 
 1. **`headless/tests/parity.rs`.** `HeadlessDriver` implements `NodeDriver` (Track A) by spawning `messenger-headless run --data-dir <tmp> --keyring file --name <n> --relay disabled --lan off --bind 127.0.0.1:0` (Track B). It drives the node through the `control.rs` client exported from the lib. It runs the **same** three scenarios as `core/tests/discovery_parity.rs`; together they are DD-02's "Harness parity" test.
+   - **Scope note (write it in the test's doc comment and the README):** host processes run with `--lan off` because loopback multicast is unreliable, so `presence_off_persists_and_stays_dialable` proves presence **persistence and dialability** at both levels, not LAN **visibility**. DD-02 asks for "a trust-gate / presence test" to pass identically; the trust-gate scenarios satisfy that fully. Presence **visibility** at Level 3 is covered by `docker/smoke.sh` stage 5, and at Level 1 by `discovery_lan.rs` (`MemoryLan`).
 2. **Pre-commit gate** blocking test-only backends from the desktop app:
 
    ```bash
@@ -254,6 +263,7 @@ Owns:
    - one-command smoke: `docker/smoke.sh`;
    - manual driving: `docker compose -f docker/compose.yaml exec node-a messenger-headless ctl --data-dir /data ticket`, plus `connect` / `wait` / `respond` / `presence` examples;
    - teardown: `docker compose -f docker/compose.yaml down -v` (the `-v` removes the per-node volumes; without it, identities persist until the next `down -v`);
+   - scope: containers exercise mDNS + the ticket path over direct addresses; the **relay** path is covered by the Level-1 `discovery_relay.rs` test, not by Docker; parity runs prove presence persistence/dialability, and presence visibility is checked by `smoke.sh` stage 5;
    - clear warnings: **test-only, throwaway identities; never point a real identity at a container**; the file keyring stores secrets unencrypted in the node's volume; the headless node never uses the OS keychain; the control surface has no stability or security guarantees and is not a product feature.
 
    Add `headless` (test-only) to the workspace table. In AGENTS.md, add `headless/` and `docker/` to the layout table with the same caveats.
@@ -294,7 +304,8 @@ git commit   # runs .githooks/pre-commit; NEVER --no-verify
 | Malformed control input crashes the node | 8 KiB cap, timeout, typed errors. | `oversized_or_garbage_control_request_is_rejected`. |
 | Symlink attacks on keyring/socket paths | `symlink_metadata` checks; non-file/non-socket paths are refused; file names are fixed and built from the uuid. | FileKeychain symlink test, `run_refuses_symlinked_socket_path`. |
 | Real identity pointed at a container | Banner and README warnings. A fresh identity per volume; no import path. | README review. `banner_says_test_only`. |
-| Residue across containers or after teardown | Each service has its own named volume. `down -v --remove-orphans` removes volumes and containers. | `smoke.sh` stage 6 assertions (no volumes, no containers left for the project label). |
+| Residue across containers or after teardown | Each service has its own named volume. `down -v --remove-orphans` removes volumes and containers. | `smoke.sh` stage 6 (distinct NodeIds/account_ids, no cross-node files, removing A leaves B unchanged) and stage 7 (no volumes, no containers left for the project label). |
+| Testers assume Level 3 exercises the relay | Explicit scope note in `compose.yaml` and README; relay is covered by the Level-1 `discovery_relay.rs` canary test. | README review; `grep -n "relay" docker/compose.yaml` shows the scope comment. |
 | Plaintext/secrets in harness output | DTO-only stdout; NodeId-only stderr. | `stdout_events_contain_no_key_material`. |
 
 ## Definition of Done
@@ -306,7 +317,10 @@ git commit   # runs .githooks/pre-commit; NEVER --no-verify
   - connect by ticket: prompt → Accept → connected (the Hello round-trip),
   - keep the same identity across `restart` and reconnect silently when known,
   - honour presence OFF,
+  - stay isolated from each other (removing one leaves the other's data and identity untouched),
   - tear down with `down -v`, leaving no volumes or containers.
-- [ ] Harness parity: the same scenarios pass at Level 1 (`core/tests/discovery_parity.rs`) and against real headless processes (`headless/tests/parity.rs`).
+- [ ] Level 3's relay scope is documented (ticket path in containers; relay covered by the Level-1 relay test).
+- [ ] Harness parity: the same scenarios pass at Level 1 (`core/tests/discovery_parity.rs`) and against real headless processes (`headless/tests/parity.rs`), with the presence-visibility scope note written down.
+- [ ] Headless stdout event names come from `event_json` (tested). `headless/tests/*` are `#![cfg(unix)]`, so workspace tests pass on non-unix targets.
 - [ ] All quality gates + the pre-commit hook pass (no `--no-verify`). The smoke script was run, or its absence is explicitly reported for 02-04.
 - [ ] README has step-by-step Level 3 instructions and the warnings. The workspace table and AGENTS.md layout are updated. The PR states "wire format unchanged".

@@ -66,8 +66,8 @@ All tracks code against these signatures. **The integration sub-task owns this c
 
 ```rust
 // core/src/discovery/mod.rs: curated re-exports only
-pub use dto::{ConnectionStateDto, IncomingRequestDto, MyTicketDto};
-pub use events::{ConnectionState, FailureReason, IncomingRequest, NetEvent};
+pub use dto::{event_json, ConnectionStateDto, IncomingRequestDto, MyTicketDto};
+pub use events::{ConnectionState, Direction, FailureReason, IncomingRequest, NetEvent};
 pub use flood::{Admission, FloodGuard, GateLimits};
 pub use known_peers::{FileKnownPeers, KnownPeers, KnownPeersError};
 pub use node::{ConnectError, Node, NodeConfig, NodeDeps, RelayChoice, RespondError, StartError};
@@ -108,10 +108,13 @@ impl FloodGuard {
 // events.rs + dto.rs (foundation)
 pub enum NetEvent {
     IncomingRequest(IncomingRequest),              // -> Tauri event "incoming_request"
-    ConnectionState { node_id: NodeId, state: ConnectionState }, // -> "connection_state"
+    ConnectionState { node_id: NodeId, direction: Direction, state: ConnectionState }, // -> "connection_state"
+    MyTicketChanged,                               // -> "my_ticket_changed" (no payload; UI re-fetches net_my_ticket)
     // 02-02 adds: LanPeersChanged(Vec<LanPeer>)  -> "lan_peers_changed"
 }
 pub struct IncomingRequest { pub node_id: NodeId, pub display_name: Option<DisplayName> } // name UNVERIFIED
+/// Who opened the connection. Inbound = the peer dialed us (trust gate side); Outbound = we dialed.
+pub enum Direction { Inbound, Outbound }
 pub enum ConnectionState { Connecting, Connected, Disconnected, Failed(FailureReason) }
 pub enum FailureReason { Declined, Timeout, Unreachable, Protocol, Expired, Closed }
 
@@ -121,11 +124,19 @@ pub enum FailureReason { Declined, Timeout, Unreachable, Protocol, Expired, Clos
 #[derive(Serialize)] pub struct IncomingRequestDto { pub node_id: String, pub display_name: Option<String> }
 #[derive(Serialize)] pub struct ConnectionStateDto {
     pub node_id: String,
+    pub direction: &'static str,      // "inbound" | "outbound"
     pub state: &'static str,          // "connecting" | "connected" | "disconnected" | "failed"
     pub reason: Option<&'static str>, // "declined" | "timeout" | "unreachable" | "protocol" | "expired" | "closed"
 }
 impl From<&IncomingRequest> for IncomingRequestDto { .. }
-impl ConnectionStateDto { pub fn new(node_id: &NodeId, state: &ConnectionState) -> Self { .. } }
+impl ConnectionStateDto { pub fn new(node_id: &NodeId, direction: &Direction, state: &ConnectionState) -> Self { .. } }
+
+/// THE single mapping from a core event to its external event name + JSON payload.
+/// Used by the Tauri shell (`app.emit(name, payload)`) and by the 02-03 headless node's
+/// stdout lines, so names and shapes can never drift from the DD-02 API table.
+pub fn event_json(ev: &NetEvent) -> (&'static str, serde_json::Value);
+// "incoming_request" -> IncomingRequestDto, "connection_state" -> ConnectionStateDto,
+// "my_ticket_changed" -> null. (02-02 adds "lan_peers_changed" -> Vec<LanPeerDto>.)
 
 // node.rs (Track B)
 pub enum RelayChoice { Default /* iroh n0 mesh */, Disabled, Custom(RelayUrl) }
@@ -147,7 +158,12 @@ impl Node {
         identity: &IdentityService<K, S, T>, deps: NodeDeps, config: NodeConfig,
     ) -> Result<Node, StartError>;
     pub fn node_id(&self) -> NodeId;
-    pub fn ticket(&self) -> Result<Ticket, TicketError>;                    // from endpoint.addr()
+    pub fn ticket(&self) -> Result<Ticket, TicketError>;                    // from endpoint.addr(), right now
+    /// Waits (bounded by `timeout`, default 5 s) until the endpoint is online — home relay
+    /// connected and/or direct addrs known (verify the iroh 1.x API, e.g. `endpoint.online()`
+    /// or the first non-empty `watch_addr()` value) — then returns `ticket()`. On timeout it
+    /// returns the best ticket available now; it never fails just because the network is slow.
+    pub async fn ticket_when_ready(&self, timeout: Duration) -> Result<Ticket, TicketError>;
     pub fn connect_ticket(&self, input: &str) -> Result<NodeId, ConnectError>; // validates, spawns dial, returns at once
     pub fn respond_incoming(&self, peer: &NodeId, accept: bool) -> Result<(), RespondError>;
     pub fn pending_incoming(&self) -> Vec<IncomingRequest>; // snapshot of open prompts (UI seeding after mount/reload)
@@ -189,6 +205,9 @@ Format: keep the `p2pm:` prefix. The body is the iroh-tickets `EndpointTicket` s
 5. While pending, the acceptor never calls `accept_bi`/`accept_uni` again and never sends anything. A pending or declined peer has no path to any later layer. Only authorized connections enter `connected_peers()`, and DD-04 will consume only that set.
 6. For every authorized connection, watch `conn.closed()` and emit `Disconnected`. If a known peer reconnects, the new connection replaces the old one, which is closed.
 7. `connect_ticket` refuses its own NodeId (`SelfDial`).
+8. Every `ConnectionState` event carries its `Direction`. On the **acceptor** side, a Decline or TTL expiry emits `Failed(Declined|Expired)` with `Direction::Inbound` **only** so the UI can clear the prompt. DD-02 says declined/pending peers carry "no persistence and no history", so the UI must not keep these in any list (see Track C), and core keeps no record of them after the event.
+
+Live ticket freshness: a background task watches the endpoint's address (`watch_addr()` or equivalent; verify) and emits `NetEvent::MyTicketChanged` when the relay URL or direct-address set changes, debounced to at most one event per 2 s. This keeps My Info correct after start-up and after a network change.
 
 Close codes are `pub const` in `node.rs`: `CLOSE_DECLINED = 1`, `CLOSE_PROTOCOL = 2`, `CLOSE_BUSY = 3`.
 
@@ -204,11 +223,11 @@ This small commit lets the three tracks build independently. Every file it adds 
 
 Owns:
 - root `Cargo.toml`: `[workspace.dependencies]` for `iroh`, `iroh-tickets`, `tokio`, optional `tracing`; `iroh-base` features aligned (`key`, plus whatever `iroh-tickets` needs); `rust-version` raised as described under MSRV.
-- `core/Cargo.toml`: those deps, `tempfile` as optional, `test-support = ["dep:tempfile"]`, and the dev-only relay test helper.
+- `core/Cargo.toml`: those deps, `serde_json.workspace = true` (normal dep: `event_json` builds JSON payloads), `tempfile` as optional, `test-support = ["dep:tempfile"]`, and the dev-only relay test helper.
 - `protocol/src/lib.rs`: `pub const MAX_HELLO_BYTES: usize = 1024;` with its doc, plus a unit test that a max-length valid `Hello` encodes within it.
 - `core/src/lib.rs`: `pub mod discovery;`.
 - `core/src/discovery/mod.rs`: the slice doc comment and `mod events; mod dto;` with their re-exports. It also has two marked regions, `// ── track A modules ──` and `// ── track B modules ──`. Each track adds its own `mod …;` / `pub use …;` lines **only inside its own region**, so the merges are purely additive and never conflict. Integration removes the markers.
-- `core/src/discovery/events.rs` and `core/src/discovery/dto.rs`: the full event and DTO types from the contract, with unit tests for the exact JSON shape (`state`/`reason` strings, `display_name: null`).
+- `core/src/discovery/events.rs` and `core/src/discovery/dto.rs`: the full event and DTO types from the contract, plus `event_json`, with unit tests for the exact JSON shape (`direction`/`state`/`reason` strings, `display_name: null`) and `event_names_match_dd02_api_table`: every `NetEvent` variant maps to exactly one of `"incoming_request"`, `"connection_state"`, `"my_ticket_changed"` (02-02 extends the test with `"lan_peers_changed"`). Use an exhaustive `match` so adding a variant without a name fails to compile.
 - `core/src/discovery/flood.rs`: the full `FloodGuard` and its unit tests, as specified under Track A below. It is pure and small, and Track B's gate needs it.
 - `core/src/discovery/known_peers.rs`, **trait part only**: the `KnownPeers` trait and `KnownPeersError`. That is real content: the trust seam with its fail-closed doc. Track A adds `FileKnownPeers` to this file.
 - `AGENTS.md` and `README.md`: MSRV line only.
@@ -252,9 +271,9 @@ Owns **only** these files:
 - `core/src/identity/service.rs` (`load_identity_secret` only)
 - `core/src/identity/settings.rs` (`impl<T: SettingsStore + ?Sized> SettingsStore for Arc<T>` only)
 - `core/tests/discovery_two_nodes.rs`, `core/tests/discovery_relay.rs`
+- `core/tests/identity_integration.rs` (extend the ticket test it marks "must be extended in DD-02")
 
 The `KnownPeers` trait and `FloodGuard` already exist (from the foundation), so Track B compiles on its own. It tests against `testing::MemoryKnownPeers`. The `known_peer_reconnects_silently_across_restart` test needs Track A's `FileKnownPeers`; write it in Track B and enable it during integration (with no `#[ignore]` left behind), or rebase B onto A once A merges.
-- `core/tests/identity_integration.rs` (extend the ticket test it marks "must be extended in DD-02")
 
 Instructions:
 - Build the endpoint once in `Node::start`:
@@ -269,6 +288,7 @@ Instructions:
   - `restart(TestNode) -> TestNode`, which keeps the same keychain/dir/known store (for "across restarts").
   - `raw_dial(addr, first_frame_bytes)`: a bare iroh endpoint that sends arbitrary bytes, used by resilience tests.
   - `next_event(rx, timeout)`.
+  - `MemoryAddressLookup`: an in-process implementation of iroh's address-lookup trait (verify the 1.x trait name and methods, e.g. `AddressLookup` with `publish`/`resolve`). Nodes sharing one instance publish their `EndpointAddr` to it and resolve each other by NodeId. It stands in for iroh's internet lookup in tests, so the "dial by cached NodeId" path is tested without the network. `NodeConfig` gets a test-support-only field (or `loopback_with_lookup(lookup)` constructor) to register it.
   - Everything here is a double over the **same** `Node` code paths. There is no alternate gate.
 - `hello.rs`: `encode_hello(name) -> Vec<u8>`, `decode_hello(bytes) -> Result<Option<DisplayName>, HelloError>`, both with size checks. Unit tests: oversize, wrong version, Chat payload, invalid name → `Ok(None)`, valid round-trip.
 - Event fan-out uses `tokio::sync::broadcast` (capacity 256). A lagging receiver must not block the accept loop.
@@ -285,6 +305,10 @@ Integration tests: `core/tests/discovery_two_nodes.rs`, `#[tokio::test(flavor = 
 - `non_hello_first_frame_and_oversized_hello_are_rejected`: via `raw_dial`, send a `Chat` envelope first, then 64 KiB of junk, then random bytes. Each time: no prompt, no event, and A still serves a normal connect afterwards.
 - `self_dial_is_rejected`.
 - `connection_drop_emits_disconnected`.
+- `declined_inbound_event_is_inbound_and_leaves_no_record`: A declines B → A's event is `Failed(Declined)` with `Direction::Inbound`. Afterwards A's `connected_peers()` and `pending_incoming()` are empty and no file in A's data dir changed. B's event carries `Direction::Outbound`.
+- `cached_node_id_dials_via_address_lookup`: A and B share a `testing::MemoryAddressLookup`. B dials A from a **NodeId-only** ticket (the legacy `p2pm:<nodeid>` form, i.e. what a cached NodeId gives you) → iroh resolves A's addresses through the lookup → prompt → Accept → `Connected`. This covers DD-02 "a peer holding a ticket (or a cached NodeId) can be dialed".
+- `ticket_when_ready_waits_then_returns_and_never_hangs`: on a started node it returns a ticket that parses and contains at least one direct address (loopback). With an artificially short timeout it still returns a parseable ticket, within the timeout.
+- `my_ticket_changed_fires_when_addresses_change`: verify iroh exposes a way to trigger an address change in tests (e.g. rebinding or a test hook); if none exists, unit-test the debounce/compare logic as a pure function (`addr_set_changed(old, new) -> bool`) and say so in the test doc.
 - `identity_key_never_leaves_core`: DTO JSON (`MyTicketDto`, events) contains none of hex/decimal/base64 forms of the identity key. Reuse the canary approach from `service.rs`.
 
 Relay-fallback test, `core/tests/discovery_relay.rs` (maps to "Relay fallback (simulated no-direct-path)"):
@@ -302,7 +326,7 @@ Owns **only** these files:
 - `app/src/views/Network.svelte` (new)
 - `app/src/views/IncomingRequestPrompt.svelte` (new)
 - their `*.test.ts`
-- `app/src/lib/router.ts`, `app/src/views/MainScreen.svelte`, `app/src/views/MyInfo.svelte`, `app/src/views/MyInfo.test.ts`
+- `app/src/lib/router.ts`, `app/src/views/MainScreen.svelte`, `app/src/views/MainScreen.test.ts` (new), `app/src/views/MyInfo.svelte`, `app/src/views/MyInfo.test.ts`
 
 Code against this JSON contract (it matches the DTOs above and the commands in the integration task):
 
@@ -312,6 +336,7 @@ export interface MyTicketDto { ticket: string; qr_svg: string }
 export interface IncomingRequestDto { node_id: string; display_name: string | null }
 export interface ConnectionStateDto {
   node_id: string;
+  direction: "inbound" | "outbound";
   state: "connecting" | "connected" | "disconnected" | "failed";
   reason: "declined" | "timeout" | "unreachable" | "protocol" | "expired" | "closed" | null;
 }
@@ -326,6 +351,7 @@ export const netRespondIncoming = (nodeId: string, accept: boolean) =>
 // `net_lan_peers` complements `lan_peers_changed` (02-02). This is an addition to the DD-02 API sketch.
 export const netPendingIncoming = () => invoke<IncomingRequestDto[]>("net_pending_incoming");
 export function describeNetError(err: unknown): string { /* user-facing copy per type */ }
+// event "my_ticket_changed": no payload. Listeners re-fetch netMyTicket(). Addition to the DD-02 API sketch.
 ```
 
 > **Clipboard gate warning:** the pre-commit hook and `clipboard-guard.test.ts` grep for the words `writeText` and `clipboard` in **every** non-test file under `app/src`, comments included. Do not write either word anywhere except `MyInfo.svelte`. Say "copy" or "paste" in comments and copy text instead.
@@ -335,6 +361,7 @@ export function describeNetError(err: unknown): string { /* user-facing copy per
   - `startNetEvents()` first registers `listen("incoming_request")` and `listen("connection_state")` from `@tauri-apps/api/event`. **Then** it seeds `incomingRequests` from `netPendingIncoming()`, merging by node_id so an event that raced the snapshot is not duplicated. It returns an unlisten function. This way prompts raised before MainScreen mounted, or during a webview reload, are not lost.
   - A `NotReady` from the snapshot is ignored; the queue simply starts empty.
   - Any `connection_state` for a node_id removes that node's pending prompt.
+  - **No history for declined/expired inbound peers** (DD-02 Security): a `connection_state` with `direction: "inbound"` and `state: "failed"` only removes the prompt. It is **not** added to `connections`, and any existing entry for that node_id from an earlier inbound attempt is removed. Outbound failures (e.g. "declined" on the dialer side) are shown, because the user initiated that dial and needs the result.
 - `MainScreen.svelte`: in `onMount`, call `startNetEvents()` and unlisten on destroy. Render `<IncomingRequestPrompt />` above the tab panel, so a prompt shows whichever tab is open.
 - `router.ts`: `TabId = "my-info" | "network"`. Append `{ id: "network", label: "Network", component: Network }`.
 - `Network.svelte`:
@@ -347,6 +374,7 @@ export function describeNetError(err: unknown): string { /* user-facing copy per
   - Accept / Decline buttons → `netRespondIncoming(node_id, true|false)`. On `NoSuchRequest`, drop the prompt silently (it expired).
   - The UNVERIFIED badge is static markup and cannot be suppressed by the name.
 - `MyInfo.svelte`: keep `identityMyInfo()` for name and NodeId, then merge the live ticket: `info = { ...(await identityMyInfo()), ...(await netMyTicket()) }`. This keeps `copy(info.ticket,` and `copy(info.node_id,` intact for `clipboard-guard.test.ts`. If `netMyTicket` rejects with `NotReady`, keep the identity ticket and show a small "network starting…" note. Network.svelte must **not** use the clipboard.
+  - **Freshness:** while mounted, MyInfo listens to `my_ticket_changed` and re-fetches `netMyTicket()`, replacing ticket + QR in place; it unlistens on destroy. It also re-fetches once when a `NotReady` fallback was shown and the node later becomes ready (the first `my_ticket_changed` covers this). This way the ticket a user copies always reflects the live endpoint (relay URL + current direct addrs), not a start-up snapshot.
 
 Vitest:
 - `Network.test.ts`: submits the trimmed ticket. InvalidTicket shows an alert and the field keeps its value. The connection list updates when the mocked store changes. A name with HTML/bidi-looking text renders inert.
@@ -357,8 +385,14 @@ Vitest:
   - unlisten is called;
   - **seeding**: requests returned by `netPendingIncoming()` before any event appear in `incomingRequests`;
   - a request present both in the snapshot and in an event appears once;
-  - a `NotReady` snapshot leaves an empty queue without throwing.
-- `MyInfo.test.ts`: mock `../net` `netMyTicket`. The ticket/QR shown come from it, copy still copies exactly `info.ticket` / `info.node_id`, and the NotReady fallback works.
+  - a `NotReady` snapshot leaves an empty queue without throwing;
+  - an **inbound** `failed` (declined/expired) event removes the prompt and leaves `connections` without that node_id; an **outbound** `failed` event is kept in `connections`.
+- `MyInfo.test.ts`: mock `../net` `netMyTicket`. The ticket/QR shown come from it, copy still copies exactly `info.ticket` / `info.node_id`, and the NotReady fallback works. Emitting a mocked `my_ticket_changed` re-fetches and the displayed ticket and the copied value update to the new ticket. The listener is removed on unmount.
+- `MainScreen.test.ts` (reachability; none exists today): mock `../net` / `../identity` and `@tauri-apps/api/event`. Assert:
+  - the tab bar shows both "My Info" and "Network";
+  - clicking "Network" renders the Network view (the connect-by-ticket field is present), and clicking "My Info" goes back;
+  - with a pending request seeded from `netPendingIncoming`, the Accept/Decline prompt is visible on **both** tabs;
+  - `startNetEvents`' unlisten runs on unmount.
 - `clipboard-guard.test.ts` must still pass unchanged.
 
 ### Integration sub-task (sequential, after A, B, C merge)
@@ -372,18 +406,21 @@ Owns:
 
 1. Settings sharing: build `Arc<FileSettingsStore>` once in `setup` and pass clones to the `IdentityService` and to `NodeDeps`. Change `AppIdentity` to `IdentityService<OsKeychain, Arc<FileSettingsStore>, LiveTicketProvider>`.
 2. `net_cmd.rs` follows the `identity_cmd.rs` pattern: plain functions over `&Node` that return DTOs and `NetCmdError` (`#[serde(tag = "type")]`: `NotReady`, `InvalidTicket`, `SelfDial`, `NoSuchRequest`, `Internal`). Thin async `#[tauri::command]` wrappers:
-   - `net_my_ticket() -> MyTicketDto` (ticket + `ticket_to_qr_svg`)
+   - `net_my_ticket() -> MyTicketDto` (ticket + `ticket_to_qr_svg`), built from `node.ticket_when_ready(Duration::from_secs(5))` so the first ticket the user sees already carries the relay URL / direct addrs when the network allows it
    - `net_connect_ticket(ticket: String) -> { node_id }`
    - `net_respond_incoming(node_id: String, accept: bool)`. Parse `node_id` as `NodeId`; a malformed id → `NoSuchRequest`, never a panic.
    - `net_pending_incoming() -> Vec<IncomingRequestDto>` (from `Node::pending_incoming()`). This is an addition to the DD-02 API sketch: a read-only snapshot for UI seeding. It exposes nothing beyond what `incoming_request` already carries. Note it in the PR.
+   - The `my_ticket_changed` event (no payload) is the second addition to the DD-02 API sketch; note it in the PR too.
 3. `NetState` (managed): `tokio::sync::OnceCell<Node>` (or `RwLock<Option<Node>>`) plus a "starting" guard, so the node is started at most once. Keep the start logic in a plain, testable function, `NetState::ensure_started_with(&self, start: impl Future<Output = Result<Node, StartError>>)`, so unit tests can drive it without Tauri. `fn ensure_started(app: &AppHandle)` spawns with `tauri::async_runtime::spawn`:
    - It loads `FileKnownPeers::new(data_dir, account_id)` and calls `Node::start(&identity, deps, NodeConfig::desktop())`.
-   - It forwards `node.subscribe()` to the webview: `app.emit("incoming_request", IncomingRequestDto)` and `app.emit("connection_state", ConnectionStateDto)` (`tauri::Emitter`).
+   - It forwards `node.subscribe()` to the webview with **one** generic loop: `let (name, payload) = dto::event_json(&ev); app.emit(name, payload)` (`tauri::Emitter`). No event names are hard-coded in `app/`; they come from core's single mapping.
+   - Once the node is stored, it emits one `my_ticket_changed` so a My Info view that showed the `NotReady` fallback refreshes.
    - Commands called before the node is ready return `NotReady`.
 4. Start points:
    - In `setup`, if `identity.status()` is `Present`, call `ensure_started`.
    - In the `identity_provision` command wrapper, call it after a successful provision, which needs an `AppHandle` parameter. The first run then gets a live node without a new command.
    - A start failure leaves the app usable (My Info falls back to the NodeId-only ticket) and reports `NotReady`.
+   - **Graceful shutdown:** switch from `.run(ctx)` to `.build(ctx)?.run(|app, event| …)` and, on `RunEvent::ExitRequested`/`Exit`, take the node out of `NetState` and `block_on(node.shutdown())` with a bounded timeout (e.g. 2 s), so connected peers get a prompt close (`Disconnected`) instead of waiting for an idle timeout. Put the take-and-shutdown logic in a plain `NetState::shutdown_with_timeout(&self, d)` function so it can be unit-tested.
 5. Register `net_my_ticket`, `net_connect_ticket`, `net_respond_incoming`, `net_pending_incoming` in `generate_handler!`. Check `capabilities/default.json`: `core:default` must cover event listen. Do not add clipboard or other permissions.
 6. Command tests in `net_cmd.rs` (`#[tokio::test]`, using `messenger_core::discovery::testing`):
    - `errors_serialize_with_type_tag`
@@ -398,6 +435,8 @@ Owns:
    - `commands_return_not_ready_before_start`: every `net_*` plain function on an unstarted `NetState` returns `NotReady`.
    - `start_failure_reports_not_ready_and_my_info_falls_back`: a failing start future leaves `NotReady`, and `identity_my_info` still returns the NodeId-only ticket.
    - `dial_adds_known_only_after_hello_reply`: dialing a peer that declines, times out or is unreachable leaves the dialer's known store unchanged. A dial that gets a valid reply adds it.
+   - `shutdown_closes_connections_and_peer_sees_disconnected`: two in-process nodes connected; `NetState::shutdown_with_timeout` on A → B emits `Disconnected` within a few seconds, and a second shutdown call is a no-op (no panic).
+   - `forwarded_event_names_are_the_dd02_names`: drive a prompt + accept through two nodes, collect `event_json` output via the same forwarding helper the app uses (factor it as `fn forward(ev, emit: impl Fn(&str, Value))`), and assert the names seen are exactly from `{"incoming_request", "connection_state", "my_ticket_changed"}`.
 7. README:
    - "Run the app" gains "Connect two devices by ticket".
    - Manual GUI checklist gains steps: My Info ticket is the long live form; paste it on another device → Accept/Decline prompt on the receiver, marked Unverified; Accept → both show Connected; Decline → dialer shows Declined; relaunch → a known peer connects without a prompt.
@@ -442,6 +481,9 @@ The two-node and relay tests run inside `cargo test --workspace`, so they are pa
 | Identity key leaks to app/DTO/logs | `load_identity_secret` is `pub(crate)`. Conversion happens inside `Node::start`. DTOs hold strings only. | `identity_key_never_leaves_core`, `dtos_never_contain_key_material`, the pre-commit secret grep, `grep -rnE "SecretKey(::\|Bytes)\|iroh_base::SecretKey\|DbKey" app/src app/src-tauri/src` → nothing. |
 | Plaintext/names in logs or a side channel | No payload/name logging. All traffic is iroh QUIC. No debug flag bypasses the gate or encryption. | Relay canary capture test. `grep -rniE "debug_bypass\|skip_trust\|insecure" core/src app/src-tauri/src` → none outside test-support/tests. |
 | Test-only TLS/relay shortcuts reach the desktop build | They are confined to `[dev-dependencies]` / `cfg(any(test, feature = "test-support"))`. The app's normal deps never enable `test-support`. | `grep -n "test-support" app/src-tauri/Cargo.toml` → only under `[dev-dependencies]`. `cargo tree -p app -e normal -f '{p} {f}' \| grep test-support` → empty (verify flags). |
+| Declined/expired unknown peers leave a trace ("no history" violation) | Acceptor-side failures carry `direction: "inbound"`; netStore only clears the prompt and never lists them. Core keeps no record after the event. | `declined_inbound_event_is_inbound_and_leaves_no_record`, netStore inbound/outbound failure test. |
+| Stale/incomplete ticket shared (missing relay → peer behind NAT can't connect) | `ticket_when_ready` + `my_ticket_changed` refresh in My Info. | `ticket_when_ready_waits_then_returns_and_never_hangs`, MyInfo refresh Vitest. Manual: open My Info right after launch; the ticket updates once the relay connects. |
+| Event names drift from the DD-02 API (UI silently stops receiving prompts) | One `event_json` mapping in core, used by app and headless; exhaustive match. | `event_names_match_dd02_api_table`, `forwarded_event_names_are_the_dd02_names`. `grep -n '"incoming_request"\|"connection_state"' app/src-tauri/src` → none (names only come from core). |
 | HTML/bidi injection through peer names in UI | Core validates names (`validate_display_name` rejects control and bidi). Svelte uses text interpolation only. | Vitest inert-render tests. `grep -n "@html" app/src/views/Network.svelte app/src/views/IncomingRequestPrompt.svelte` → none. |
 
 ## Definition of Done
@@ -454,6 +496,10 @@ The two-node and relay tests run inside `cargo test --workspace`, so they are pa
 - [ ] Flood guard caps pending prompts and rate-limits per-NodeId retries, silently.
 - [ ] Relay-only connection works. Canary capture shows no plaintext on the relay path.
 - [ ] Events `incoming_request` / `connection_state` reach the GUI. The Network tab (reachable from MainScreen) offers connect-by-ticket ("Connect and remember this device") and connection state. The prompt is global and is seeded from `net_pending_incoming`, so no prompt is lost before mount or on reload.
-- [ ] `NetState` starts the node at most once. Commands return `NotReady` before it is ready. A dialed peer is remembered only after its Hello reply.
+- [ ] `NetState` starts the node at most once. Commands return `NotReady` before it is ready. A dialed peer is remembered only after its Hello reply. The node shuts down gracefully on app exit.
+- [ ] My Info's ticket reflects the live endpoint: `net_my_ticket` waits (bounded) for the endpoint to be online, and `my_ticket_changed` refreshes it after address changes.
+- [ ] A peer known only by NodeId (legacy/cached) can be dialed via iroh address lookup (tested with `MemoryAddressLookup`).
+- [ ] Declined/expired inbound peers leave no history in core or the UI; every `connection_state` carries `direction`.
+- [ ] Event names come only from core's `event_json` and match the DD-02 API table (tested). `MainScreen.test.ts` proves the Network tab is reachable and the prompt is global.
 - [ ] All tests listed above exist and pass. All quality gates and the pre-commit hook pass with no `--no-verify`.
 - [ ] README (run/test/manual checklist) and AGENTS.md layout are updated. The PR states "wire format unchanged; PROTOCOL_VERSION not bumped".

@@ -34,9 +34,13 @@ Keep a scratch checklist **outside the repo**, e.g. in your session scratch dire
 | D1 | ALPN `p2p-messenger/1` from `protocol` registered; no other ALPN accepted | `grep -rn "alpns(" core/src` uses `protocol::ALPN` only. |
 | D2 | Relay overridable by configuration, persisted in settings by `account_id` | `SettingsStore::{get,set}_relay_url`, `MESSENGER_RELAY_URL`, README. |
 | D3 | mDNS record = NodeId + self-chosen name; peers marked unverified | `LanPeerDto.verified == false`. UI badge. The name is carried **only** in the mDNS record (see S12). |
-| D4 | Ticket = NodeId + relay URL(s) + direct addrs, produced from the live endpoint | `Ticket::from_endpoint_addr`, `LiveTicketProvider`, `my_ticket_parses_and_names_this_node`. |
-| D5 | API: `net_presence_get/set`, `net_lan_peers`, `net_connect_ticket`, `net_my_ticket`, `net_respond_incoming`; events `lan_peers_changed`, `incoming_request`, `connection_state` | `grep -n "net_\|emit(" app/src-tauri/src/*.rs` and `generate_handler!` list. The frontend `listen(` calls use exactly these names. The one addition, `net_pending_incoming` (read-only prompt snapshot for UI seeding), is documented in the PR and exposes nothing beyond `incoming_request`. |
+| D4 | Ticket = NodeId + relay URL(s) + direct addrs, produced from the **live** endpoint | `Ticket::from_endpoint_addr`, `LiveTicketProvider`, `my_ticket_parses_and_names_this_node`. Freshness: `net_my_ticket` uses `ticket_when_ready`; `my_ticket_changed` refreshes My Info (`ticket_when_ready_waits_then_returns_and_never_hangs`, MyInfo refresh Vitest). Manual: open My Info right after launch on a real network; the ticket gains the relay URL once connected. |
+| D4b | Internet: a peer holding a ticket **or a cached NodeId** can be dialed | `cached_node_id_dials_via_address_lookup` (NodeId-only ticket resolved via `MemoryAddressLookup`). `NodeConfig::desktop()` keeps iroh's internet address lookup enabled. |
+| D5 | API: `net_presence_get/set`, `net_lan_peers`, `net_connect_ticket`, `net_my_ticket`, `net_respond_incoming`; events `lan_peers_changed`, `incoming_request`, `connection_state` | `generate_handler!` list. Event names come **only** from `core::discovery::dto::event_json` (`event_names_match_dd02_api_table`, `forwarded_event_names_are_the_dd02_names`, `stdout_event_names_are_the_dd02_names`); `grep -rn '"incoming_request"\|"connection_state"\|"lan_peers_changed"' app/src-tauri/src headless/src` → none. The frontend `listen(` calls use exactly these names. The two additions, `net_pending_incoming` (read-only prompt snapshot) and the `my_ticket_changed` event (no payload), are documented in the PR and expose nothing beyond existing data. |
+| D5b | Every screen reachable | `MainScreen.test.ts`: Network tab in the tab bar and navigable; prompt visible on every tab. Manual GUI walk. |
+| D5c | Endpoint lives for the process lifetime and closes cleanly | `NetState` start-once tests; `shutdown_closes_connections_and_peer_sees_disconnected`; exit hook in `lib.rs`. |
 | D6 | LAN peers ephemeral; no other people's addresses or tickets persisted beyond known NodeIds | `lan_peers_are_never_persisted`. Inspect the `known_peers.json` schema: NodeId + name + timestamp only. |
+| D6b | Presence + relay override persisted per `account_id` ("DD-05 settings table") | Stored in the interim `FileSettingsStore`; the deviation is documented in `settings.rs` and the PR. Settings round-trip and account-isolation tests. |
 | D7 | Both paths converge on one trust check | `lan_pick_uses_the_same_trust_gate`, `lan_and_ticket_paths_share_one_trust_gate_end_to_end`. |
 | D8 | Post-accept hand-off stays inside DD-02 scope (Hello exchange + connected state; no Chat UI) | `connected_peers()` only holds authorized connections. No Chat UI exists yet. |
 
@@ -46,7 +50,7 @@ Keep a scratch checklist **outside the repo**, e.g. in your session scratch dire
 |---|---|---|
 | S1 | No side channel or debug bypass carrying content | `grep -rniE "skip_trust\|auto.?accept\|no_prompt\|bypass\|insecure\|danger" core/src app/src-tauri/src headless/src`: any hit must be test-only and justified. Relay canary test passes. |
 | S2 | NodeId is the only identity; names never used for trust/dedup; same-name peers distinct | Review every use of `display_name` in `core/src/discovery`. Same-name tests (Rust + Vitest). |
-| S3 | Unknown peers gated; declined/pending carry no persistence or history | Gate tests incl. `decline_closes_and_persists_nothing`, `pending_prompt_expires`. |
+| S3 | Unknown peers gated; declined/pending carry no persistence or history | Gate tests incl. `decline_closes_and_persists_nothing`, `pending_prompt_expires`, `declined_inbound_event_is_inbound_and_leaves_no_record`. UI: netStore test that an inbound `failed` event never enters `connections`. Manual: decline a request; the Network tab shows no trace of that NodeId. |
 | S4 | Flood guard: cap pending, per-NodeId rate limit, silent drops | `flood_guard_bounds_prompts` + unit tests. No log above trace on the drop path. |
 | S5 | Ticket validation; malformed → handled error, never panic | Fuzz + corrupted-ticket tests. `grep -n "unwrap()\|expect(" core/src/discovery core/src/identity/ticket.rs` outside tests. |
 | S6 | mDNS opt-out discoverable; presence OFF verifiably stops advertising | Presence tests + GUI copy + Docker presence stage. |
@@ -70,8 +74,8 @@ Keep a scratch checklist **outside the repo**, e.g. in your session scratch dire
 | Relay fallback + payload capture | `discovery_relay.rs` |
 | Resilience (mDNS records + tickets) | `malformed_and_oversized_mdns_records_never_panic`, ticket fuzz, `non_hello_first_frame_and_oversized_hello_are_rejected` |
 | Profile isolation | `core/tests/profile_isolation.rs`, `app/src-tauri/src/profile.rs` tests |
-| Containers | `docker/smoke.sh` PASS (all stages incl. teardown residue check) |
-| Harness parity | `core/tests/discovery_parity.rs` + `headless/tests/parity.rs` (same scenarios) |
+| Containers | `docker/smoke.sh` PASS (all stages, incl. stage 6 per-container isolation and stage 7 teardown residue check). Relay scope note present in `compose.yaml` and README. |
+| Harness parity | `core/tests/discovery_parity.rs` + `headless/tests/parity.rs` (same scenarios), with the presence-visibility scope note in the test doc and README |
 
 **Definition of done (DD-02).** Copy all 12 checkboxes from the design doc into the scratch list and tick each one with evidence.
 
@@ -155,6 +159,9 @@ For the **prevention** each check relies on, see the Security tables of 02-01 (e
 | Vulnerability | Check |
 |---|---|
 | Unknown peer reaching messaging before Accept | Gate tests pass. Single `accept_bi` call site. `connected_peers()` excludes pending. |
+| Declined/expired peers leaving history | `declined_inbound_event_is_inbound_and_leaves_no_record`, netStore inbound-failure test, manual decline check. |
+| Stale ticket shared from My Info | `ticket_when_ready` tests, MyInfo `my_ticket_changed` refresh test. |
+| Event names drifting from the DD-02 API | `event_json` tests in core, app and headless; hard-coded-name grep. |
 | Prompt-flood DoS | Flood tests. Review the bounded tables (`max_tracked_peers`, `max_handshakes`). |
 | Ticket / mDNS / Hello / control-request parsing panics or oversized input | Fuzz + resilience tests. `unwrap`/`expect` grep on peer-input paths. |
 | Self-asserted name used for trust/dedup | Code review of every `display_name` use. Same-name tests. |
@@ -172,5 +179,6 @@ For the **prevention** each check relies on, see the Security tables of 02-01 (e
 - [ ] All gaps found were fixed with tests, and README/AGENTS.md reflect the final behaviour and structure.
 - [ ] The self-chosen name is verified absent from internet-published data and withdrawn while presence is OFF (S12).
 - [ ] The two-network hole-punch check was performed and its observed path types recorded. NAT traversal is confirmed to be iroh's, used unchanged.
+- [ ] Live-ticket freshness, cached-NodeId dialing, "no history" for declined inbound peers, `event_json` as the only source of event names, Network-tab reachability, graceful shutdown, and per-container isolation are each verified with the evidence listed in D4, D4b, D5, D5b, D5c, S3 and the Containers row.
 - [ ] All quality gates, the pre-commit hook (no `--no-verify`), the real-mDNS ignored test, the Level-2 manual run and `docker/smoke.sh` pass.
 - [ ] `design_docs/steps/02-*.md` deleted, and only those files. The commit/PR follows the template and states the protocol impact explicitly.
