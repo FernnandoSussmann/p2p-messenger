@@ -7,13 +7,27 @@ fn main() {
 }
 
 #[cfg(unix)]
-fn main() {
-    use messenger_headless::cli;
+#[tokio::main]
+async fn main() {
+    use messenger_headless::cli::{self, Command};
+    use messenger_headless::{control, node};
 
-    if let Err(e) = cli::parse(std::env::args().skip(1)) {
-        eprintln!("messenger-headless: {e}");
-        std::process::exit(2);
-    }
-    eprintln!("messenger-headless: node runtime is not wired yet");
-    std::process::exit(1);
+    let command = match cli::parse(std::env::args().skip(1)) {
+        Ok(command) => command,
+        Err(e) => {
+            eprintln!("messenger-headless: {e}");
+            std::process::exit(2);
+        }
+    };
+    let code = match command {
+        Command::Ctl { data_dir, command } => control::ctl(&data_dir, &command).await,
+        Command::Run(args) => match node::run(args).await {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("messenger-headless: {e}");
+                1
+            }
+        },
+    };
+    std::process::exit(code);
 }
