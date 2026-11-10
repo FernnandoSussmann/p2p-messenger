@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import {
     identityMyInfo,
@@ -7,6 +8,7 @@
     describeError,
     type MyInfoDto,
   } from "../identity";
+  import { netMyTicket } from "../net";
 
   let info = $state<MyInfoDto | null>(null);
   let loadError = $state<string | null>(null);
@@ -14,10 +16,18 @@
   let nameError = $state<string | null>(null);
   let saving = $state(false);
   let notice = $state<string | null>(null);
+  let networkStarting = $state(false);
 
   async function load() {
     try {
-      info = await identityMyInfo();
+      const base = await identityMyInfo();
+      try {
+        info = { ...base, ...(await netMyTicket()) };
+        networkStarting = false;
+      } catch {
+        info = base;
+        networkStarting = true;
+      }
       draft = info.display_name ?? "";
       loadError = null;
     } catch (e) {
@@ -25,7 +35,23 @@
     }
   }
 
-  onMount(load);
+  async function refreshTicket() {
+    try {
+      const live = await netMyTicket();
+      if (info) info = { ...info, ...live };
+      networkStarting = false;
+    } catch {
+      networkStarting = true;
+    }
+  }
+
+  onMount(() => {
+    load();
+    const unlisten = listen("my_ticket_changed", refreshTicket).catch(() => () => {});
+    return () => {
+      unlisten.then((u) => u());
+    };
+  });
 
   async function saveName(ev: Event) {
     ev.preventDefault();
@@ -75,6 +101,7 @@
     <p>Current name: <span data-testid="display-name">{info.display_name ?? ""}</span></p>
 
     <h3>Connection ticket</h3>
+    {#if networkStarting}<p>Network starting…</p>{/if}
     <button type="button" onclick={copyTicket}>Copy ticket</button>
     <pre data-testid="ticket" style="white-space: pre-wrap; word-break: break-all">{info.ticket}</pre>
     <div data-testid="qr" aria-label="Ticket QR code">{@html info.qr_svg}</div>

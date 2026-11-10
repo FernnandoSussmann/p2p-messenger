@@ -2,6 +2,7 @@ import { writable } from "svelte/store";
 import type { Component } from "svelte";
 import FirstRunWizard from "../views/FirstRunWizard.svelte";
 import MyInfo from "../views/MyInfo.svelte";
+import Network from "../views/Network.svelte";
 
 export type AppView =
   | { kind: "loading" }
@@ -9,7 +10,7 @@ export type AppView =
   | { kind: "wizard" }
   | { kind: "main" };
 
-export type TabId = "my-info";
+export type TabId = "my-info" | "network";
 
 export interface Tab {
   id: TabId;
@@ -24,4 +25,7 @@ export const activeTab = writable<TabId>("my-info");
 export const wizardView: Component<{ onDone: () => void }> = FirstRunWizard;
 
 // Tabs rendered by MainScreen; each component takes no props.
-export const tabs: Tab[] = [{ id: "my-info", label: "My Info", component: MyInfo }];
+export const tabs: Tab[] = [
+  { id: "my-info", label: "My Info", component: MyInfo },
+  { id: "network", label: "Network", component: Network },
+];
