@@ -17,11 +17,23 @@ export interface ConnectionStateDto {
   reason: "declined" | "timeout" | "unreachable" | "protocol" | "expired" | "closed" | null;
 }
 
+export interface LanPeerDto {
+  node_id: string;
+  display_name: string | null;
+  verified: boolean;
+  ticket: string;
+}
+
+export interface PresenceDto {
+  enabled: boolean;
+}
+
 export type NetCmdError =
   | { type: "NotReady" }
   | { type: "InvalidTicket" }
   | { type: "SelfDial" }
   | { type: "NoSuchRequest" }
+  | { type: "SettingsUnavailable" }
   | { type: "Internal" };
 
 export const netMyTicket = () => invoke<MyTicketDto>("net_my_ticket");
@@ -34,6 +46,13 @@ export const netRespondIncoming = (nodeId: string, accept: boolean) =>
 
 export const netPendingIncoming = () => invoke<IncomingRequestDto[]>("net_pending_incoming");
 
+export const netPresenceGet = () => invoke<PresenceDto>("net_presence_get");
+
+export const netPresenceSet = (enabled: boolean) =>
+  invoke<PresenceDto>("net_presence_set", { enabled });
+
+export const netLanPeers = () => invoke<LanPeerDto[]>("net_lan_peers");
+
 export function describeNetError(err: unknown): string {
   const e = err as NetCmdError | undefined;
   switch (e?.type) {
@@ -45,6 +64,8 @@ export function describeNetError(err: unknown): string {
       return "That's your own ticket.";
     case "NoSuchRequest":
       return "That request is no longer pending.";
+    case "SettingsUnavailable":
+      return "Settings are unavailable right now.";
     default:
       return "Something went wrong.";
   }
