@@ -18,5 +18,6 @@ pub use flood::{Admission, FloodGuard, GateLimits};
 pub use known_peers::{KnownPeers, KnownPeersError};
 
 // ── track A modules ──
+pub use known_peers::FileKnownPeers;
 
 // ── track B modules ──

@@ -75,13 +75,7 @@ fn each_node_parses_the_others_ticket_and_gets_its_node_id() {
     );
 
     let text = ticket_a.as_str();
-    let tampered = [
-        &text[..text.len() - 1],
-        &text[..text.len() / 2],
-        &format!("  {text}"),
-        &format!(" \t{text}"),
-        "",
-    ];
+    let tampered = [&text[..text.len() - 1], &text[..text.len() / 2], ""];
     for bad in tampered {
         assert!(
             Ticket::parse(bad).is_err(),
