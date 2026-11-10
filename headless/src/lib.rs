@@ -6,10 +6,7 @@
 pub mod cli;
 pub mod file_keychain;
 
-// ── track B modules ──
 #[cfg(unix)]
 pub mod control;
 #[cfg(unix)]
 pub mod node;
-
-// ── integration ──

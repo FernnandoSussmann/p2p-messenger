@@ -1,4 +1,4 @@
-target/
+**/target/
 **/node_modules/
 app/dist/
 .git/
@@ -7,3 +7,5 @@ app/dist/
 .env*
 **/keyring/
 **/control.sock
+.claude/
+design_docs/

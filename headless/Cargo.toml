@@ -26,3 +26,4 @@ zeroize.workspace = true
 [dev-dependencies]
 messenger_core = { package = "core", path = "../core", features = ["test-support"] }
 tempfile.workspace = true
+tokio = { workspace = true, features = ["process"] }

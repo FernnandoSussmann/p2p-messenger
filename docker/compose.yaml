@@ -1,7 +1,10 @@
 # Level 3 harness: TEST-ONLY throwaway nodes with unencrypted file keyrings.
-# Relay scope: nodes run with --relay disabled on an internal network, so this
+# Relay scope: nodes run with --relay disabled, so this
 # exercises mDNS and the ticket path over direct addresses, NOT a relay. Relay
 # coverage is the Level-1 test core/tests/discovery_relay.rs.
+# The network is deliberately not "internal": swarm-discovery joins the mDNS
+# group via the default route, which an internal bridge lacks, so LAN discovery
+# would never work there. Nothing is published to the host (no "ports:").
 #
 # More nodes: copy a service block (e.g. node-c) together with its own named
 # volume. Do not use --scale: replicas would share one volume and identity.
@@ -31,4 +34,4 @@ volumes:
   node-b-data: {}
 
 networks:
-  lan: { driver: bridge, internal: true }
+  lan: { driver: bridge }

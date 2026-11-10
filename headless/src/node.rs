@@ -32,17 +32,15 @@ const WAIT_EVENTS: [&str; 3] = ["incoming_request", "connection_state", "lan_pee
 type HeadlessIdentity = IdentityService<FileKeychain, Arc<FileSettingsStore>, LiveTicketProvider>;
 
 struct Logged {
-    seq: u64,
     name: &'static str,
     payload: Value,
 }
 
 struct LogInner {
-    next_seq: u64,
     buf: VecDeque<Logged>,
 }
 
-/// The last [`EVENT_BUFFER`] events, with a wake-up for waiters.
+/// The last [`EVENT_BUFFER`] unconsumed events, with a wake-up for waiters.
 pub struct EventLog {
     inner: Mutex<LogInner>,
     notify: Notify,
@@ -78,7 +76,6 @@ impl EventLog {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(LogInner {
-                next_seq: 0,
                 buf: VecDeque::new(),
             }),
             notify: Notify::new(),
@@ -87,9 +84,7 @@ impl EventLog {
 
     pub fn push(&self, name: &'static str, payload: Value) {
         if let Ok(mut inner) = self.inner.lock() {
-            let seq = inner.next_seq;
-            inner.next_seq += 1;
-            inner.buf.push_back(Logged { seq, name, payload });
+            inner.buf.push_back(Logged { name, payload });
             if inner.buf.len() > EVENT_BUFFER {
                 inner.buf.pop_front();
             }
@@ -97,27 +92,22 @@ impl EventLog {
         self.notify.notify_waiters();
     }
 
-    /// The first buffered event that matches, else the first live one, as
-    /// `{"event":…,"payload":…}`; `None` on timeout.
+    /// Removes and returns the oldest buffered event that matches, else the
+    /// first live one, as `{"event":…,"payload":…}`; `None` on timeout. Each
+    /// event is returned at most once, like `NodeDriver::wait_event`.
     pub async fn wait(&self, filter: &EventFilter<'_>, timeout: Duration) -> Option<Value> {
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
-        let mut cursor = 0u64;
         loop {
             let notified = self.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
             {
-                let inner = self.inner.lock().ok()?;
-                let hit = inner
-                    .buf
-                    .iter()
-                    .filter(|e| e.seq >= cursor)
-                    .find(|e| filter.matches(e));
-                if let Some(e) = hit {
+                let mut inner = self.inner.lock().ok()?;
+                if let Some(at) = inner.buf.iter().position(|e| filter.matches(e)) {
+                    let e = inner.buf.remove(at)?;
                     return Some(json!({ "event": e.name, "payload": e.payload }));
                 }
-                cursor = inner.next_seq;
             }
             tokio::select! {
                 () = &mut notified => {}
@@ -353,6 +343,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(got["payload"]["state"], "connecting");
+        assert!(
+            log.wait(
+                &filter("connection_state", None, None),
+                Duration::from_millis(50)
+            )
+            .await
+            .is_none(),
+            "a returned event is consumed"
+        );
 
         let waiter = {
             let log = Arc::clone(&log);

@@ -255,18 +255,27 @@ where
 /// Sends one request to the node serving `data_dir`, prints the response and
 /// returns the process exit code (0 if `ok`, 1 otherwise).
 pub async fn ctl(data_dir: &Path, command: &CtlCommand) -> i32 {
-    let request = Request::from(command);
-    let timeout = match &request {
+    let body = request(data_dir, &Request::from(command)).await;
+    println!("{body}");
+    i32::from(body.get("ok") != Some(&Value::Bool(true)))
+}
+
+/// Sends one request and returns the response body; transport failures become
+/// `{"ok":false,"error":…}`.
+pub async fn request(data_dir: &Path, request: &Request) -> Value {
+    let timeout = match request {
         Request::Wait { timeout_secs, .. } => wait_timeout(*timeout_secs) + CLIENT_SLACK,
         _ => CLIENT_SLACK,
     };
-    let body = match tokio::time::timeout(timeout, exchange(data_dir, &request)).await {
+    request_with_timeout(data_dir, request, timeout).await
+}
+
+async fn request_with_timeout(data_dir: &Path, request: &Request, timeout: Duration) -> Value {
+    match tokio::time::timeout(timeout, exchange(data_dir, request)).await {
         Ok(Ok(body)) => body,
         Ok(Err(name)) => json!({ "ok": false, "error": name }),
         Err(_) => json!({ "ok": false, "error": "Timeout" }),
-    };
-    println!("{body}");
-    i32::from(body.get("ok") != Some(&Value::Bool(true)))
+    }
 }
 
 async fn exchange(data_dir: &Path, request: &Request) -> Result<Value, &'static str> {
