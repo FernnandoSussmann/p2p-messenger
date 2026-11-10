@@ -1,0 +1,34 @@
+# Level 3 harness: TEST-ONLY throwaway nodes with unencrypted file keyrings.
+# Relay scope: nodes run with --relay disabled on an internal network, so this
+# exercises mDNS and the ticket path over direct addresses, NOT a relay. Relay
+# coverage is the Level-1 test core/tests/discovery_relay.rs.
+#
+# More nodes: copy a service block (e.g. node-c) together with its own named
+# volume. Do not use --scale: replicas would share one volume and identity.
+name: p2pm-harness
+
+x-node: &node
+  build: { context: .., dockerfile: docker/headless.Dockerfile }
+  image: p2pm-headless:test
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  networks: [lan]
+  # No "ports:": the control socket lives inside the container only.
+
+services:
+  node-a:
+    <<: *node
+    volumes: ["node-a-data:/data"]
+    command: [run, --data-dir, /data, --keyring, file, --name, "Node A", --relay, disabled, --lan, mdns]
+  node-b:
+    <<: *node
+    volumes: ["node-b-data:/data"]
+    command: [run, --data-dir, /data, --keyring, file, --name, "Node B", --relay, disabled, --lan, mdns]
+
+volumes:
+  node-a-data: {}
+  node-b-data: {}
+
+networks:
+  lan: { driver: bridge, internal: true }
