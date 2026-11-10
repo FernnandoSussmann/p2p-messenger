@@ -14,12 +14,19 @@ zeroize.workspace = true
 keyring.workspace = true
 keyring-core.workspace = true
 iroh-base.workspace = true
+iroh.workspace = true
+iroh-tickets.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tempfile = { workspace = true, optional = true }
+protocol.workspace = true
 qrcode.workspace = true
 rand.workspace = true
 
 [features]
-test-support = []
+test-support = ["dep:tempfile"]
 
 [dev-dependencies]
 tempfile.workspace = true
 core = { path = ".", features = ["test-support"] }
+iroh = { workspace = true, features = ["test-utils"] }

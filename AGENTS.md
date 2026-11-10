@@ -52,7 +52,7 @@ fix the failure instead.
 - **`core` forbids unsafe** (`#![forbid(unsafe_code)]`).
 - **Wire format:** serde structs serialized with `postcard`; every frame carries a protocol `version`. Any breaking wire change must bump `PROTOCOL_VERSION`.
 - **Data is namespaced by `account_id`** (random v4 UUID, unrelated to any key or NodeId) to leave room for multiple identities.
-- Workspace Rust edition 2021, MSRV 1.80. Follow `rustfmt` defaults.
+- Workspace Rust edition 2021, MSRV 1.95. Follow `rustfmt` defaults.
 - Frontend: Svelte 5 + TypeScript, built with Vite; tests with Vitest + Testing Library.
 
 ## Security rules (enforced; do not weaken)
