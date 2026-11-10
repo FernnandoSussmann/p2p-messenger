@@ -8,6 +8,7 @@ mod display_name;
 mod keychain;
 mod keygen;
 mod marker;
+mod profile;
 mod secret;
 mod service;
 mod settings;
@@ -16,6 +17,7 @@ mod ticket;
 pub use display_name::{validate_display_name, DisplayName, DisplayNameError};
 pub use keychain::{KeychainError, KeychainStore, OsKeychain, APP_KEYCHAIN_SERVICE};
 pub use marker::{read_marker, write_marker, AccountId, MarkerError};
+pub use profile::{Profile, ProfileError};
 pub use secret::{DbKey, SecretKeyBytes};
 pub use service::{
     IdentityService, IdentityStatus, LoadError, LoadedIdentity, MyInfo, MyInfoError,
