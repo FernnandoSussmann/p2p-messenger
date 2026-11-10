@@ -49,8 +49,8 @@ fn shared_node(
 
 #[test]
 fn each_node_parses_the_others_ticket_and_gets_its_node_id() {
-    // Live ticket content (relay and direct addresses) is deferred to DD-02;
-    // this test covers the NodeId-only ticket and must be extended there.
+    // Covers the NodeId-only ticket; the live ticket with addresses is covered
+    // by `live_ticket_is_served_by_my_info_and_carries_addresses`.
     let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (kc_a, kc_b) = (Arc::new(FakeKeychain::new()), Arc::new(FakeKeychain::new()));
     let (a, b) = (shared_node(&kc_a, &dir_a), shared_node(&kc_b, &dir_b));
@@ -164,4 +164,44 @@ fn display_name_and_provisioned_at_survive_restart() {
     let third = build(&keychain, &dir);
     assert!(matches!(third.my_info(), Err(MyInfoError::Settings(_))));
     assert!(matches!(third.status(), IdentityStatus::Present { .. }));
+}
+
+#[test]
+fn live_ticket_is_served_by_my_info_and_carries_addresses() {
+    use core::discovery::testing::spawn_test_node;
+    use std::time::Duration;
+
+    // `#[tokio::test]` cannot be used: the package name `core` shadows std `core`.
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let a = spawn_test_node("Alice").await;
+            let b = spawn_test_node("Bob").await;
+            let live = a
+                .node
+                .ticket_when_ready(Duration::from_secs(5))
+                .await
+                .unwrap();
+
+            let info = a.identity.my_info().unwrap();
+            let parsed = Ticket::parse(info.ticket.as_str()).unwrap();
+            assert_eq!(parsed.node_id, a.id());
+            assert_eq!(parsed.node_id, info.node_id);
+            assert!(parsed.addr.ip_addrs().next().is_some());
+            assert_eq!(
+                Ticket::parse(live.as_str()).unwrap().addr.id,
+                parsed.addr.id
+            );
+            assert!(info.qr_svg.contains("<svg"));
+            assert_ne!(parsed.node_id, b.id());
+
+            // A node that never started still serves the legacy ticket.
+            let legacy = format!("p2pm:{}", b.id());
+            assert_eq!(
+                Ticket::parse(&legacy).unwrap().addr,
+                iroh::EndpointAddr::new(b.id())
+            );
+        });
 }
