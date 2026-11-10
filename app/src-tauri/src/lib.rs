@@ -3,6 +3,7 @@
 
 mod identity_cmd;
 mod net_cmd;
+mod profile;
 #[cfg(test)]
 mod test_util;
 
