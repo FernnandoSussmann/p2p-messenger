@@ -1,0 +1,8 @@
+{
+  "name": "p2p-messenger",
+  "private": true,
+  "description": "Convenience scripts for running the desktop app from the repo root.",
+  "scripts": {
+    "start": "npm --prefix app install --no-audit --no-fund && npm --prefix app run tauri dev"
+  }
+}

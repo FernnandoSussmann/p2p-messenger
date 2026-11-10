@@ -4,7 +4,7 @@
 mod identity_cmd;
 
 use messenger_core::identity::{
-    IdentityService, MemorySettingsStore, NodeIdTicketProvider, OsKeychain,
+    FileSettingsStore, IdentityService, NodeIdTicketProvider, OsKeychain,
 };
 use tauri::Manager;
 
@@ -18,9 +18,15 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700))
+                    .map_err(|e| format!("cannot restrict app data directory permissions: {e}"))?;
+            }
             let service: AppIdentity = IdentityService::new(
                 OsKeychain::native()?,
-                MemorySettingsStore::new(),
+                FileSettingsStore::new(data_dir.clone()),
                 NodeIdTicketProvider,
                 data_dir,
             );

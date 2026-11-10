@@ -21,7 +21,7 @@ pub use service::{
     IdentityService, IdentityStatus, LoadError, LoadedIdentity, MyInfo, MyInfoError,
     ProvisionError, Provisioned, SetNameError, StatusError,
 };
-pub use settings::{MemorySettingsStore, SettingsError, SettingsStore};
+pub use settings::{FileSettingsStore, MemorySettingsStore, SettingsError, SettingsStore};
 pub use ticket::{
     ticket_to_qr_svg, NodeId, NodeIdTicketProvider, ParsedTicket, Ticket, TicketError,
     TicketProvider,
