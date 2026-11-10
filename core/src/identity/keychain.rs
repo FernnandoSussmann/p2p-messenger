@@ -125,7 +125,7 @@ impl KeychainStore for OsKeychain {
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing {
     use std::collections::HashMap;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use super::*;
 
@@ -184,6 +184,37 @@ pub mod testing {
                 .unwrap()
                 .remove(&account_name(id, suffix));
             removed.map(|_| ()).ok_or(KeychainError::NotFound)
+        }
+    }
+
+    /// Lets a test keep a handle to the fake while the service owns a clone.
+    impl KeychainStore for Arc<FakeKeychain> {
+        fn store_identity_key(
+            &self,
+            id: &AccountId,
+            key: &SecretKeyBytes,
+        ) -> Result<(), KeychainError> {
+            self.as_ref().store_identity_key(id, key)
+        }
+
+        fn store_db_key(&self, id: &AccountId, key: &DbKey) -> Result<(), KeychainError> {
+            self.as_ref().store_db_key(id, key)
+        }
+
+        fn load_identity_key(&self, id: &AccountId) -> Result<SecretKeyBytes, KeychainError> {
+            self.as_ref().load_identity_key(id)
+        }
+
+        fn load_db_key(&self, id: &AccountId) -> Result<DbKey, KeychainError> {
+            self.as_ref().load_db_key(id)
+        }
+
+        fn delete_identity_key(&self, id: &AccountId) -> Result<(), KeychainError> {
+            self.as_ref().delete_identity_key(id)
+        }
+
+        fn delete_db_key(&self, id: &AccountId) -> Result<(), KeychainError> {
+            self.as_ref().delete_db_key(id)
         }
     }
 

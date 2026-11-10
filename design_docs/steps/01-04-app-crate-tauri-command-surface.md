@@ -145,13 +145,13 @@ writes a real secret or commits one**, and no secret is ever embedded in a DTO, 
 
 ## Definition of Done (verifiable checklist)
 
-- [ ] `app/src-tauri` joins the workspace with real content; the app builds and launches. *(DD DoD bullet 8 — app crate real content.)*
-- [ ] The four commands (`identity_status`, `identity_provision`, `identity_set_display_name`,
+- [x] `app/src-tauri` joins the workspace with real content; the app builds and launches. *(DD DoD bullet 8 — app crate real content.)*
+- [x] The four commands (`identity_status`, `identity_provision`, `identity_set_display_name`,
       `identity_my_info`) are registered and return the documented DTOs. *(DD API sketch.)*
-- [ ] Minimal UI: fresh install can provision and then shows its NodeId; error/access-denied states block
+- [x] Minimal UI: fresh install can provision and then shows its NodeId; error/access-denied states block
       instead of auto-provisioning. *(DD DoD bullets 1–3 surfaced end-to-end at a basic level.)*
-- [ ] No DTO/return type can carry a secret; `SecretKeyBytes`/`DbKey` do not appear in `app/src-tauri`;
+- [x] No DTO/return type can carry a secret; `SecretKeyBytes`/`DbKey` do not appear in `app/src-tauri`;
       boundary leak-guard test + grep gate pass. *(DD DoD bullet 6; DD Testing "secret-leak guard" — Tauri slice.)*
-- [ ] `identity_set_display_name` surfaces validation errors; access-denied maps to a fail-closed error. *(DD DoD bullets 3, 4.)*
-- [ ] `fmt`/`clippy -D warnings`/`test --workspace`/`cargo build` + frontend build & typecheck all green; no
+- [x] `identity_set_display_name` surfaces validation errors; access-denied maps to a fail-closed error. *(DD DoD bullets 3, 4.)*
+- [x] `fmt`/`clippy -D warnings`/`test --workspace`/`cargo build` + frontend build & typecheck all green; no
       hardcoded secrets.
