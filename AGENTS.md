@@ -1,0 +1,74 @@
+# AGENTS.md
+
+Guidance for AI coding agents working in this repo.
+
+## Project
+
+A decentralized, end-to-end-encrypted peer-to-peer messenger in Rust. No central
+server: each user's keypair is their identity, and peers connect directly over
+[iroh](https://www.iroh.computer/) (addressed by public key, relay fallback
+carries ciphertext only). Desktop (Linux/macOS/Windows) is the first target for this app, it will expand to mobile and web interface in the future.
+UI is Tauri v2 + Svelte 5. License: GPL-3.0-only.
+
+## Layout
+
+Cargo workspace built from vertical feature slices.
+
+| Path             | Role                                                                          |
+| ---------------- | ----------------------------------------------------------------------------- |
+| `protocol/`      | Shared serde wire types (`Envelope`, `Payload`, …), `PROTOCOL_VERSION`, `ALPN`. Transport/UI-agnostic. |
+| `core/`          | UI-agnostic logic, one module per feature slice (currently `identity/`). Knows nothing about Tauri. |
+| `app/src-tauri/` | Thin Tauri shell: command handlers (e.g. `identity_cmd.rs`) over `core`.      |
+| `app/src/`       | Svelte frontend (`views/`, `lib/`), Vitest tests alongside (`*.test.ts`).     |
+| `.githooks/`     | Tracked pre-commit hook: the mandatory local test gate (there is no CI).      |
+
+Notes:
+- The package name `core` shadows std `core`; dependents import it with `package = "core"`.
+- Shared dependency versions live in the root `Cargo.toml` `[workspace.dependencies]`; member crates use `dep.workspace = true`.
+- `core` has a `test-support` feature exposing test doubles (e.g. `identity::testing`).
+
+## Commands
+
+```sh
+npm start                        # install frontend deps + run the desktop app (tauri dev)
+cargo test --workspace           # all Rust tests
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cd app && npm ci && npm test && npm run check && npm run build   # frontend
+```
+
+Do not use plain `cargo run` for the app: it shows "connection refused" because
+nothing serves the dev frontend. Use `npm start`.
+
+Install the hook once per clone: `git config core.hooksPath .githooks`. It runs
+fmt, clippy (warnings are errors), workspace tests, `cargo build`, the secret
+gates below, and the frontend check/test/build. Never bypass it (`--no-verify`);
+fix the failure instead.
+
+## Conventions
+
+- **Only files with real content.** No empty folders, stub modules, or placeholder files. Add a crate or module only when it carries working code.
+- **Vertical slices.** New functionality goes in a `core` feature slice with its own types and invariants; slices expose a curated API via re-exports in `mod.rs`. Keep slices testable without the UI (tests with in-process nodes/fakes).
+- **`core` forbids unsafe** (`#![forbid(unsafe_code)]`).
+- **Wire format:** serde structs serialized with `postcard`; every frame carries a protocol `version`. Any breaking wire change must bump `PROTOCOL_VERSION`.
+- **Data is namespaced by `account_id`** (random v4 UUID, unrelated to any key or NodeId) to leave room for multiple identities.
+- Workspace Rust edition 2021, MSRV 1.80. Follow `rustfmt` defaults.
+- Frontend: Svelte 5 + TypeScript, built with Vite; tests with Vitest + Testing Library.
+
+## Security rules (enforced; do not weaken)
+
+- Private keys and the SQLCipher key live in the OS keychain (`keyring`). Secret types (`SecretKeyBytes`, `DbKey`) are zeroized and must **never** cross into `app/` — the pre-commit hook greps for these names under `app/`, so do not reference them there, even in types or comments.
+- Clipboard access (`writeText` / `clipboard`) is permitted **only** in `app/src/views/MyInfo.svelte` (and tests).
+- Logs must never contain message plaintext, private keys, or secrets. NodeIds and addresses are fine.
+- Everything on the wire is encrypted; relays only ever see ciphertext.
+
+## Testing
+
+- Rust unit and integration tests: `core/tests/`, plus `#[cfg(test)]` modules; app-shell flow tests live in `app/src-tauri/` (e.g. `first_run_flow_end_to_end`, `tests/pre_commit_hook.rs`).
+- Frontend component tests: `app/src/**/*.test.ts`.
+- No Tauri WebDriver is available here, so GUI flows are covered at command-invoke and component level, plus the manual checklist in `README.md`. If you change the pre-commit hook, verify it by staging a file under `app/` containing a secret-looking identifier and confirming the commit is rejected.
+- Keychain-dependent tests should use the in-memory test doubles, not the real OS keychain.
+
+## Pull requests
+
+Follow `.github/PULL_REQUEST_TEMPLATE.md`: name affected crates/slices, state explicitly whether the wire format changed (and `PROTOCOL_VERSION` bumped), list how it was verified, and update `README.md` if behavior or structure changed.
