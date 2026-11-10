@@ -14,6 +14,9 @@
       } else if (status.type === "Absent") {
         appView.set({ kind: "wizard" });
       } else {
+        // Present always goes to main, even with no stored name (crash between
+        // provision and naming): My Info is where the name is then set. No
+        // extra blocking screen, and the wizard is never re-shown.
         appView.set({ kind: "main" });
       }
     } catch (err) {

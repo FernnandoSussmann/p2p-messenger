@@ -6,15 +6,15 @@
 
 use messenger_core::identity::KeychainStore;
 use messenger_core::identity::{
-    DisplayNameError, IdentityService, IdentityStatus, KeychainError, LoadError, MarkerError,
-    MemorySettingsStore, MyInfoError, NodeIdTicketProvider, OsKeychain, ProvisionError,
-    SetNameError, SettingsStore, StatusError, TicketProvider,
+    DisplayNameError, FileSettingsStore, IdentityService, IdentityStatus, KeychainError, LoadError,
+    MarkerError, MyInfoError, NodeIdTicketProvider, OsKeychain, ProvisionError, SetNameError,
+    SettingsStore, StatusError, TicketProvider,
 };
 use serde::Serialize;
 use tauri::State;
 
 /// The service as wired by the app.
-pub type AppIdentity = IdentityService<OsKeychain, MemorySettingsStore, NodeIdTicketProvider>;
+pub type AppIdentity = IdentityService<OsKeychain, FileSettingsStore, NodeIdTicketProvider>;
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
@@ -204,6 +204,7 @@ mod tests {
     use std::sync::Arc;
 
     use messenger_core::identity::testing::FakeKeychain;
+    use messenger_core::identity::MemorySettingsStore;
 
     use super::*;
 

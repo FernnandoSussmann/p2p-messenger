@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use core::identity::testing::FakeKeychain;
 use core::identity::{
-    IdentityService, IdentityStatus, KeychainStore, MemorySettingsStore, NodeIdTicketProvider,
-    ProvisionError, Ticket,
+    FileSettingsStore, IdentityService, IdentityStatus, KeychainStore, MemorySettingsStore,
+    MyInfoError, NodeIdTicketProvider, ProvisionError, SettingsStore, Ticket,
 };
 
 type Node = IdentityService<FakeKeychain, MemorySettingsStore, NodeIdTicketProvider>;
@@ -125,4 +125,49 @@ fn restart_yields_same_node_id_repeated() {
         ));
         assert_eq!(second.load().unwrap().node_id, provisioned.node_id);
     }
+}
+
+#[test]
+fn display_name_and_provisioned_at_survive_restart() {
+    type FileNode = IdentityService<Arc<FakeKeychain>, FileSettingsStore, NodeIdTicketProvider>;
+    let build = |keychain: &Arc<FakeKeychain>, dir: &tempfile::TempDir| -> FileNode {
+        IdentityService::new(
+            Arc::clone(keychain),
+            FileSettingsStore::new(dir.path()),
+            NodeIdTicketProvider,
+            dir.path(),
+        )
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let keychain = Arc::new(FakeKeychain::new());
+
+    let first = build(&keychain, &dir);
+    let provisioned = first.provision().unwrap();
+    first.set_display_name("Ada 🦀").unwrap();
+    let before = FileSettingsStore::new(dir.path())
+        .get_provisioned_at(&provisioned.account_id)
+        .unwrap();
+    assert!(before.is_some());
+    drop(first);
+
+    let second = build(&keychain, &dir);
+    assert_eq!(
+        second.status(),
+        IdentityStatus::Present {
+            account_id: provisioned.account_id,
+            node_id: provisioned.node_id,
+        }
+    );
+    let name = second.my_info().unwrap().display_name;
+    assert_eq!(name.as_ref().map(|n| n.as_str()), Some("Ada 🦀"));
+    let after = FileSettingsStore::new(dir.path())
+        .get_provisioned_at(&provisioned.account_id)
+        .unwrap();
+    assert_eq!(before, after);
+    drop(second);
+
+    std::fs::write(dir.path().join("settings.json"), b"not json {{{").unwrap();
+    let third = build(&keychain, &dir);
+    assert!(matches!(third.my_info(), Err(MyInfoError::Settings(_))));
+    assert!(matches!(third.status(), IdentityStatus::Present { .. }));
 }
