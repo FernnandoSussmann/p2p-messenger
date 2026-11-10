@@ -133,7 +133,7 @@ fn fail<E: std::fmt::Display>(what: &str) -> impl FnOnce(E) -> RunError + '_ {
 }
 
 fn node_config(args: &RunArgs) -> Result<NodeConfig, RunError> {
-    let mut config = NodeConfig::desktop();
+    let mut config = NodeConfig::desktop().with_internet_lookup(false);
     config.relay = match &args.relay {
         RelayArg::Default => RelayChoice::Default,
         RelayArg::Disabled => RelayChoice::Disabled,
@@ -323,6 +323,19 @@ async fn handle(node: Arc<Node>, log: Arc<EventLog>, request: Request) -> Reply 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headless_disables_internet_lookup_but_desktop_keeps_it() {
+        let args = RunArgs {
+            data_dir: "/tmp/x".into(),
+            name: messenger_core::identity::validate_display_name("T").unwrap(),
+            relay: RelayArg::Default,
+            lan: LanArg::Off,
+            bind: None,
+        };
+        assert!(!node_config(&args).unwrap().internet_lookup());
+        assert!(NodeConfig::desktop().internet_lookup());
+    }
 
     fn filter<'a>(name: &'a str, node: Option<&'a str>, state: Option<&'a str>) -> EventFilter<'a> {
         EventFilter { name, node, state }

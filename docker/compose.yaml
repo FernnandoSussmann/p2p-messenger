@@ -2,9 +2,12 @@
 # Relay scope: nodes run with --relay disabled, so this
 # exercises mDNS and the ticket path over direct addresses, NOT a relay. Relay
 # coverage is the Level-1 test core/tests/discovery_relay.rs.
-# The network is deliberately not "internal": swarm-discovery joins the mDNS
+# The bridge is deliberately NOT "internal": swarm-discovery joins the mDNS
 # group via the default route, which an internal bridge lacks, so LAN discovery
-# would never work there. Nothing is published to the host (no "ports:").
+# would never work there. Egress is therefore open to the host's network. Nodes
+# run with n0 internet lookup disabled (headless always does), so they do no
+# n0 DNS/pkarr publishing or resolution. Nothing is published to the host
+# (no "ports:").
 #
 # More nodes: copy a service block (e.g. node-c) together with its own named
 # volume. Do not use --scale: replicas would share one volume and identity.

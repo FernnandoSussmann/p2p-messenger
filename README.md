@@ -213,6 +213,10 @@ Scope:
   addresses. They run `--relay disabled`, so the
   **relay** path is not tested by Docker; it is covered by the Level-1
   `core/tests/discovery_relay.rs`.
+- The Docker bridge is not `internal: true`: mDNS needs the default route, so
+  egress is open. Headless nodes always run with n0 internet lookup disabled
+  (no n0 DNS/pkarr publishing or resolution); `--relay` is honored as given.
+  The desktop app keeps internet lookup on.
 - Parity: the same trust-gate and presence scenarios run against in-process
   nodes (`core/tests/discovery_parity.rs`) and against real headless processes
   (`headless/tests/parity.rs`). Host processes use `--lan off` (loopback
