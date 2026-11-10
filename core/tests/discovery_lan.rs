@@ -221,7 +221,8 @@ fn lan_sim_b_discovers_a_with_node_id_and_unverified_name() {
         assert_eq!(event_json(&ev).0, "lan_peers_changed");
         assert_eq!(names(&b.node.lan_peers()), vec![Some("Alice".to_owned())]);
         assert!(!has(&a.node.lan_peers(), &a.id()), "never lists itself");
-        assert!(has(&a.node.lan_peers(), &b.id()), "A browses B too");
+        let mut ea = a.node.subscribe();
+        until_lan(&a, &mut ea, |p| has(p, &b.id())).await; // A browses B too
     });
 }
 
