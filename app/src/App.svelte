@@ -1,44 +1,23 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import {
-    describeError,
-    identityMyInfo,
-    identityProvision,
-    identityStatus,
-    type MyInfoDto,
-  } from "./identity";
-
-  type View =
-    | { kind: "loading" }
-    | { kind: "blocked"; message: string }
-    | { kind: "absent" }
-    | { kind: "present"; info: MyInfoDto };
-
-  let view: View = $state({ kind: "loading" });
-  let error = $state("");
+  import { describeError, identityStatus } from "./identity";
+  import { appView, wizardView as Wizard } from "./lib/router";
+  import ErrorBlocking from "./views/ErrorBlocking.svelte";
+  import MainScreen from "./views/MainScreen.svelte";
 
   async function refresh() {
+    appView.set({ kind: "loading" });
     try {
       const status = await identityStatus();
       if (status.type === "Error") {
-        view = { kind: "blocked", message: status.reason };
+        appView.set({ kind: "blocked", message: status.reason });
       } else if (status.type === "Absent") {
-        view = { kind: "absent" };
+        appView.set({ kind: "wizard" });
       } else {
-        view = { kind: "present", info: await identityMyInfo() };
+        appView.set({ kind: "main" });
       }
     } catch (err) {
-      view = { kind: "blocked", message: describeError(err) };
-    }
-  }
-
-  async function create() {
-    error = "";
-    try {
-      await identityProvision();
-      await refresh();
-    } catch (err) {
-      error = describeError(err);
+      appView.set({ kind: "blocked", message: describeError(err) });
     }
   }
 
@@ -46,18 +25,14 @@
 </script>
 
 <main>
-  <h1>p2p-messenger</h1>
-  {#if view.kind === "loading"}
+  {#if $appView.kind === "loading"}
     <p>Loading...</p>
-  {:else if view.kind === "blocked"}
-    <p role="alert">Identity unavailable: {view.message}</p>
-    <p>Resolve the problem and restart the app. No identity will be created.</p>
-  {:else if view.kind === "absent"}
-    <button onclick={create}>Create identity</button>
-    {#if error}<p role="alert">{error}</p>{/if}
+  {:else if $appView.kind === "blocked"}
+    <ErrorBlocking message={$appView.message} onRetry={refresh} />
+  {:else if $appView.kind === "wizard"}
+    <Wizard onDone={() => appView.set({ kind: "main" })} />
   {:else}
-    <p>Name: {view.info.display_name ?? "(not set)"}</p>
-    <p>NodeId: <code>{view.info.node_id}</code></p>
+    <MainScreen />
   {/if}
 </main>
 
@@ -65,8 +40,5 @@
   main {
     font-family: sans-serif;
     margin: 2rem;
-  }
-  code {
-    word-break: break-all;
   }
 </style>
