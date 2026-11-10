@@ -16,15 +16,19 @@ use protocol::ALPN;
 use tempfile::TempDir;
 use tokio::sync::{broadcast, mpsc};
 
-use super::events::NetEvent;
-use super::flood::GateLimits;
-use super::hello::encode_hello;
-use super::known_peers::{KnownPeers, KnownPeersError};
-use super::lan::{encode_lan_name, LanDiscovery, LanError, LanEvent, LanMode, LAN_NAME_MAX_BYTES};
-use super::node::{Node, NodeConfig, NodeDeps};
-use super::ticket_provider::LiveTicketProvider;
+use crate::discovery::events::NetEvent;
+use crate::discovery::flood::GateLimits;
+use crate::discovery::hello::encode_hello;
+use crate::discovery::known_peers::{KnownPeers, KnownPeersError};
+use crate::discovery::lan::{
+    encode_lan_name, LanDiscovery, LanError, LanEvent, LanMode, LAN_NAME_MAX_BYTES,
+};
+use crate::discovery::node::{Node, NodeConfig, NodeDeps};
+use crate::discovery::ticket_provider::LiveTicketProvider;
 use crate::identity::testing::FakeKeychain;
 use crate::identity::{DisplayName, IdentityService, MemorySettingsStore, NodeId, SettingsStore};
+
+pub mod scenarios;
 
 const LAN_BUS_BUFFER: usize = 2048;
 
@@ -187,7 +191,7 @@ impl MemoryLanBus {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(super) fn join(&self, endpoint: Endpoint) -> MemoryLan {
+    pub(in crate::discovery) fn join(&self, endpoint: Endpoint) -> MemoryLan {
         let id = endpoint.id();
         let (tx, rx) = mpsc::channel(LAN_BUS_BUFFER);
         let mut state = self.lock();
