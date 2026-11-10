@@ -3,9 +3,6 @@
 //! An invalid value is an error, never a silent fall-back to the default
 //! profile, because that would mix two testers' identities.
 
-// Not called until `run` is wired to it; the integration step removes this.
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use messenger_core::identity::{Profile, ProfileError};
