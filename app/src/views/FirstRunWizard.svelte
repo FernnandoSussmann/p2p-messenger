@@ -3,9 +3,9 @@
     describeError,
     identityProvision,
     identitySetDisplayName,
-    type DisplayNameKind,
     type IdentityCmdError,
   } from "../identity";
+  import { displayNameMessages } from "../lib/displayNameMessages";
 
   let { onDone }: { onDone: () => void } = $props();
 
@@ -13,13 +13,6 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
   let name = $state("");
-
-  const nameMessages: Record<DisplayNameKind, string> = {
-    Empty: "Display name cannot be empty.",
-    TooLong: "Display name is too long.",
-    ControlCharacter: "Display name cannot contain control characters or line breaks.",
-    BidiOverride: "Display name cannot contain text-direction override characters.",
-  };
 
   async function generate() {
     busy = true;
@@ -42,7 +35,7 @@
     ev.preventDefault();
     if (busy) return;
     if (name.trim() === "") {
-      error = nameMessages.Empty;
+      error = displayNameMessages.Empty;
       return;
     }
     busy = true;
@@ -53,7 +46,7 @@
       onDone();
     } catch (e) {
       const err = e as IdentityCmdError | undefined;
-      error = err?.type === "InvalidDisplayName" ? nameMessages[err.kind] : describeError(e);
+      error = err?.type === "InvalidDisplayName" ? displayNameMessages[err.kind] : describeError(e);
     } finally {
       busy = false;
     }

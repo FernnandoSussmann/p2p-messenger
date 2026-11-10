@@ -360,6 +360,29 @@ mod tests {
     }
 
     #[test]
+    fn first_run_flow_end_to_end() {
+        let (service, _kc, _dir) = setup();
+        assert!(matches!(status(&service), StatusDto::Absent));
+
+        let provisioned = provision(&service).unwrap();
+        set_display_name(&service, "Alice").unwrap();
+        let info = my_info(&service).unwrap();
+        assert_eq!(info.display_name.as_deref(), Some("Alice"));
+        assert_eq!(info.node_id, provisioned.node_id);
+        assert!(info.ticket.contains(&info.node_id));
+        assert!(info.qr_svg.contains("<svg"));
+
+        match status(&service) {
+            StatusDto::Present { node_id, .. } => assert_eq!(node_id, provisioned.node_id),
+            other => panic!("expected Present, got {other:?}"),
+        }
+        assert_eq!(
+            provision(&service).unwrap_err(),
+            IdentityCmdError::AlreadyProvisioned
+        );
+    }
+
+    #[test]
     fn set_display_name_before_provisioning_is_internal() {
         let (service, _kc, _dir) = setup();
         assert_eq!(

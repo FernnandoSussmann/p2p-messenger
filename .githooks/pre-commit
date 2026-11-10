@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Mandatory local gate (no CI). Install: git config core.hooksPath .githooks
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace
+cargo build
+
+# Secret gate: key types must never appear in the app shell or frontend.
+if grep -RnE 'SecretKeyBytes|DbKey' app \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=target --exclude-dir=gen; then
+  echo "pre-commit: secret key type referenced in app/" >&2
+  exit 1
+fi
+
+# Clipboard gate: only MyInfo.svelte (and tests) may touch the clipboard.
+hits=$(grep -RlE 'writeText|clipboard' app/src --exclude='*.test.ts' || true)
+if [ -n "$hits" ] && [ "$hits" != "app/src/views/MyInfo.svelte" ]; then
+  echo "pre-commit: clipboard used outside MyInfo.svelte:" >&2
+  echo "$hits" >&2
+  exit 1
+fi
+
+cd app
+npm run check
+npm test
+npm run build

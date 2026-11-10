@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { displayNameMessages } from "./lib/displayNameMessages";
 
 export type StatusDto =
   | { type: "Present"; account_id: string; node_id: string }
@@ -49,7 +50,7 @@ export function describeError(err: unknown): string {
     case "KeychainAccessDenied":
       return "Access to the system keychain was denied.";
     case "InvalidDisplayName":
-      return `Invalid display name (${e.kind}).`;
+      return displayNameMessages[e.kind];
     default:
       return "Something went wrong.";
   }

@@ -64,7 +64,7 @@ describe("MyInfo", () => {
     const input = await screen.findByLabelText("Display name");
     await fireEvent.input(input, { target: { value: "" } });
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Invalid display name (Empty)");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Display name cannot be empty.");
   });
 
   it("saves a valid name and reloads", async () => {
