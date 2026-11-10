@@ -1,5 +1,6 @@
 //! Events the discovery slice emits to its subscribers.
 
+use super::lan::LanPeer;
 use crate::identity::{DisplayName, NodeId};
 
 /// Something observable happened on the network layer.
@@ -15,6 +16,8 @@ pub enum NetEvent {
     },
     /// The live ticket changed; consumers re-fetch it.
     MyTicketChanged,
+    /// The set of peers visible on the LAN changed; carries the full list.
+    LanPeersChanged(Vec<LanPeer>),
 }
 
 /// A pending request from an unknown peer. The name is self-asserted and

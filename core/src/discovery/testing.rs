@@ -7,22 +7,26 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use iroh::address_lookup::{
-    AddressLookupBuilder, AddressLookupBuilderError, EndpointInfo, MemoryLookup,
+    AddressLookup, AddressLookupBuilder, AddressLookupBuilderError, EndpointData, EndpointInfo,
+    MemoryLookup,
 };
 use iroh::endpoint::{presets, Connection};
 use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey, Watcher};
 use protocol::ALPN;
 use tempfile::TempDir;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 use super::events::NetEvent;
 use super::flood::GateLimits;
 use super::hello::encode_hello;
 use super::known_peers::{KnownPeers, KnownPeersError};
+use super::lan::{encode_lan_name, LanDiscovery, LanError, LanEvent, LanMode, LAN_NAME_MAX_BYTES};
 use super::node::{Node, NodeConfig, NodeDeps};
 use super::ticket_provider::LiveTicketProvider;
 use crate::identity::testing::FakeKeychain;
 use crate::identity::{DisplayName, IdentityService, MemorySettingsStore, NodeId, SettingsStore};
+
+const LAN_BUS_BUFFER: usize = 2048;
 
 /// In-memory [`KnownPeers`]. Names are stored as advisory values only.
 #[derive(Default)]
@@ -126,6 +130,150 @@ impl AddressLookupBuilder for MemoryAddressLookup {
     }
 }
 
+/// Records every `EndpointData` the endpoint hands to its address lookups,
+/// to prove what would reach internet publishers.
+#[derive(Clone, Debug, Default)]
+pub struct RecordingAddressLookup {
+    published: Arc<Mutex<Vec<EndpointData>>>,
+}
+
+impl RecordingAddressLookup {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn published(&self) -> Vec<EndpointData> {
+        self.published
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl AddressLookup for RecordingAddressLookup {
+    fn publish(&self, data: &EndpointData) {
+        self.published
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(data.clone());
+    }
+}
+
+struct Member {
+    tx: mpsc::Sender<LanEvent>,
+}
+
+#[derive(Default)]
+struct BusState {
+    members: HashMap<NodeId, Member>,
+    /// The record each advertising node currently publishes.
+    advertised: HashMap<NodeId, (EndpointAddr, Option<Vec<u8>>)>,
+    advertise_calls: HashMap<NodeId, usize>,
+}
+
+/// A deterministic in-process stand-in for the multicast socket. Advertising
+/// nodes are visible to every other node on the same bus.
+#[derive(Clone, Default)]
+pub struct MemoryLanBus {
+    state: Arc<Mutex<BusState>>,
+}
+
+impl MemoryLanBus {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BusState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(super) fn join(&self, endpoint: Endpoint) -> MemoryLan {
+        let id = endpoint.id();
+        let (tx, rx) = mpsc::channel(LAN_BUS_BUFFER);
+        let mut state = self.lock();
+        for (other, (addr, user_data)) in &state.advertised {
+            if *other != id {
+                let _ = tx.try_send(LanEvent::Discovered {
+                    addr: addr.clone(),
+                    user_data: user_data.clone(),
+                });
+            }
+        }
+        state.members.insert(id, Member { tx });
+        MemoryLan {
+            bus: self.clone(),
+            endpoint,
+            events: Mutex::new(Some(rx)),
+        }
+    }
+
+    /// What `id` currently publishes: `None` when not advertising, otherwise
+    /// the raw name bytes attached to its record (`None` inside = no name).
+    pub fn advertised_record(&self, id: &NodeId) -> Option<Option<Vec<u8>>> {
+        self.lock().advertised.get(id).map(|(_, data)| data.clone())
+    }
+
+    /// How many times `id` turned its record on or refreshed it on this bus.
+    pub fn advertise_count(&self, id: &NodeId) -> usize {
+        self.lock().advertise_calls.get(id).copied().unwrap_or(0)
+    }
+
+    /// Feeds an arbitrary observation to `target`, through the same registry
+    /// and node code as a real one.
+    pub async fn inject(&self, target: &NodeId, ev: LanEvent) {
+        let tx = self.lock().members.get(target).map(|m| m.tx.clone());
+        if let Some(tx) = tx {
+            let _ = tx.send(ev).await;
+        }
+    }
+}
+
+/// One node's handle on a [`MemoryLanBus`].
+pub struct MemoryLan {
+    bus: MemoryLanBus,
+    endpoint: Endpoint,
+    events: Mutex<Option<mpsc::Receiver<LanEvent>>>,
+}
+
+impl LanDiscovery for MemoryLan {
+    fn set_advertise(&self, on: bool, local_name: Option<&DisplayName>) -> Result<(), LanError> {
+        let id = self.endpoint.id();
+        let mut state = self.bus.lock();
+        let event = if on {
+            let addr = self.endpoint.addr();
+            let user_data = local_name.map(|n| encode_lan_name(n, LAN_NAME_MAX_BYTES));
+            *state.advertise_calls.entry(id).or_default() += 1;
+            state
+                .advertised
+                .insert(id, (addr.clone(), user_data.clone()));
+            LanEvent::Discovered { addr, user_data }
+        } else if state.advertised.remove(&id).is_some() {
+            LanEvent::Expired(id)
+        } else {
+            return Ok(());
+        };
+        for (other, member) in &state.members {
+            if *other != id {
+                let _ = member.tx.try_send(event.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn events(&self) -> mpsc::Receiver<LanEvent> {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .unwrap_or_else(|| mpsc::channel(1).1)
+    }
+}
+
+/// Wraps the node's settings store, to inject faults or a different backing
+/// store for presence.
+pub type SettingsWrapper =
+    Arc<dyn Fn(Arc<MemorySettingsStore>) -> Arc<dyn SettingsStore + Send + Sync> + Send + Sync>;
+
 /// How a test node is configured beyond the defaults.
 #[derive(Clone)]
 pub struct TestOptions {
@@ -157,6 +305,16 @@ impl TestOptions {
         self.known = known;
         self
     }
+
+    pub fn with_lan(mut self, bus: &MemoryLanBus) -> Self {
+        self.config = self.config.with_lan(LanMode::Memory(bus.clone()));
+        self
+    }
+
+    pub fn with_recorder(mut self, recorder: &RecordingAddressLookup) -> Self {
+        self.config = self.config.with_recorder(recorder.clone());
+        self
+    }
 }
 
 pub type TestIdentity =
@@ -172,6 +330,7 @@ pub struct TestNode {
     settings: Arc<MemorySettingsStore>,
     tickets: LiveTicketProvider,
     options: TestOptions,
+    wrapper: Option<SettingsWrapper>,
 }
 
 impl TestNode {
@@ -185,6 +344,16 @@ pub async fn spawn_test_node(name: &str) -> TestNode {
 }
 
 pub async fn spawn_test_node_with(name: &str, options: TestOptions) -> TestNode {
+    spawn_test_node_wrapped(name, options, None).await
+}
+
+/// Like [`spawn_test_node_with`], with the node reading its settings through
+/// `wrapper` (to inject faults or back presence with a file).
+pub async fn spawn_test_node_wrapped(
+    name: &str,
+    options: TestOptions,
+    wrapper: Option<SettingsWrapper>,
+) -> TestNode {
     let dir = TempDir::new().expect("temp dir");
     let keychain = Arc::new(FakeKeychain::new());
     let settings = Arc::new(MemorySettingsStore::new());
@@ -197,7 +366,7 @@ pub async fn spawn_test_node_with(name: &str, options: TestOptions) -> TestNode 
     );
     identity.provision().expect("provision");
     identity.set_display_name(name).expect("display name");
-    start(identity, dir, keychain, settings, tickets, options).await
+    start(identity, dir, keychain, settings, tickets, options, wrapper).await
 }
 
 /// Stops the node and starts a new one over the same keychain, settings,
@@ -211,10 +380,11 @@ pub async fn restart(old: TestNode) -> TestNode {
         settings,
         tickets,
         options,
+        wrapper,
         ..
     } = old;
     node.shutdown().await;
-    start(identity, dir, keychain, settings, tickets, options).await
+    start(identity, dir, keychain, settings, tickets, options, wrapper).await
 }
 
 async fn start(
@@ -224,8 +394,12 @@ async fn start(
     settings: Arc<MemorySettingsStore>,
     tickets: LiveTicketProvider,
     options: TestOptions,
+    wrapper: Option<SettingsWrapper>,
 ) -> TestNode {
-    let settings_dyn: Arc<dyn SettingsStore + Send + Sync> = settings.clone();
+    let settings_dyn: Arc<dyn SettingsStore + Send + Sync> = match &wrapper {
+        Some(wrap) => wrap(settings.clone()),
+        None => settings.clone(),
+    };
     let node = Node::start(
         &identity,
         NodeDeps {
@@ -246,6 +420,7 @@ async fn start(
         settings,
         tickets,
         options,
+        wrapper,
     }
 }
 

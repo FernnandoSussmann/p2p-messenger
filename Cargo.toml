@@ -24,6 +24,8 @@ iroh-base = { version = "1", default-features = false, features = ["key"] }
 iroh = "1"
 protocol = { path = "protocol" }
 iroh-tickets = "1"
+iroh-mdns-address-lookup = "0.6"
+tokio-stream = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tracing = "0.1"
 rand = "0.10"

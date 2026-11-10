@@ -23,10 +23,11 @@ use super::events::{ConnectionState, Direction, FailureReason, IncomingRequest, 
 use super::flood::{Admission, FloodGuard, GateLimits};
 use super::hello::{decode_hello, encode_hello};
 use super::known_peers::KnownPeers;
+use super::lan::{LanDiscovery, LanError, LanEvent, LanMode, LanPeer, LanPeers, MdnsLan, NoLan};
 use super::ticket_provider::LiveTicketProvider;
 use crate::identity::{
-    AccountId, DisplayName, IdentityService, KeychainStore, LoadError, NodeId, SettingsStore,
-    Ticket, TicketError, TicketProvider,
+    AccountId, DisplayName, IdentityService, KeychainStore, LoadError, NodeId, SettingsError,
+    SettingsStore, Ticket, TicketError, TicketProvider,
 };
 
 /// The peer declined the request.
@@ -42,6 +43,7 @@ const EVENT_CAPACITY: usize = 256;
 const DIAL_TIMEOUT: Duration = Duration::from_secs(20);
 const REPLY_GRACE: Duration = Duration::from_secs(10);
 const TICKET_CHANGE_DEBOUNCE: Duration = Duration::from_secs(2);
+const LAN_EVENT_DEBOUNCE: Duration = Duration::from_millis(250);
 
 /// Which relays the endpoint uses.
 #[derive(Debug, Clone)]
@@ -58,9 +60,12 @@ pub struct NodeConfig {
     pub relay: RelayChoice,
     pub bind_addr: Option<SocketAddr>,
     pub limits: GateLimits,
+    pub lan: LanMode,
     internet_lookup: bool,
     #[cfg(any(test, feature = "test-support"))]
     relay_only: bool,
+    #[cfg(any(test, feature = "test-support"))]
+    recorder: Option<super::testing::RecordingAddressLookup>,
     #[cfg(any(test, feature = "test-support"))]
     lookup: Option<super::testing::MemoryAddressLookup>,
     #[cfg(any(test, feature = "test-support"))]
@@ -75,9 +80,12 @@ impl NodeConfig {
             relay: RelayChoice::Default,
             bind_addr: None,
             limits: GateLimits::default(),
+            lan: LanMode::Mdns,
             internet_lookup: true,
             #[cfg(any(test, feature = "test-support"))]
             relay_only: false,
+            #[cfg(any(test, feature = "test-support"))]
+            recorder: None,
             #[cfg(any(test, feature = "test-support"))]
             lookup: None,
             #[cfg(any(test, feature = "test-support"))]
@@ -91,6 +99,7 @@ impl NodeConfig {
         Self {
             relay: RelayChoice::Disabled,
             bind_addr: Some(SocketAddr::from(([127, 0, 0, 1], 0))),
+            lan: LanMode::Off,
             internet_lookup: false,
             ..Self::desktop()
         }
@@ -103,10 +112,24 @@ impl NodeConfig {
         Self {
             relay: RelayChoice::Custom(relay),
             bind_addr: None,
+            lan: LanMode::Off,
             internet_lookup: false,
             relay_only: true,
             ..Self::desktop()
         }
+    }
+
+    pub fn with_lan(mut self, lan: LanMode) -> Self {
+        self.lan = lan;
+        self
+    }
+
+    /// Registers a lookup that records every `EndpointData` the endpoint
+    /// publishes.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_recorder(mut self, recorder: super::testing::RecordingAddressLookup) -> Self {
+        self.recorder = Some(recorder);
+        self
     }
 
     /// Registers a shared in-process address lookup.
@@ -160,6 +183,24 @@ impl std::error::Error for StartError {
         }
     }
 }
+
+/// Why presence could not be changed. Advertising is left as it was.
+#[derive(Debug)]
+pub enum PresenceError {
+    Settings(SettingsError),
+    Lan(LanError),
+}
+
+impl fmt::Display for PresenceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Settings(e) => write!(f, "could not save presence: {e}"),
+            Self::Lan(e) => write!(f, "could not change presence: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for PresenceError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectError {
@@ -220,6 +261,10 @@ struct Inner {
     limits: GateLimits,
     expects_relay: bool,
     events: broadcast::Sender<NetEvent>,
+    lan: Arc<dyn LanDiscovery>,
+    lan_peers: Mutex<LanPeers>,
+    /// Whether our LAN record is published. Held while it changes.
+    presence: Mutex<bool>,
     state: Mutex<State>,
     closing: AtomicBool,
     runtime: tokio::runtime::Handle,
@@ -243,9 +288,12 @@ impl Inner {
         });
     }
 
+    fn local_name(&self) -> Option<DisplayName> {
+        self.settings.get_display_name(&self.account).ok().flatten()
+    }
+
     fn own_hello(&self) -> Vec<u8> {
-        let name = self.settings.get_display_name(&self.account).ok().flatten();
-        encode_hello(name.as_ref().map_or("", DisplayName::as_str))
+        encode_hello(self.local_name().as_ref().map_or("", DisplayName::as_str))
     }
 
     fn take_pending(&self, peer: &NodeId) -> Option<Pending> {
@@ -276,6 +324,33 @@ impl Node {
         drop(secret);
         let endpoint = build_endpoint(key, &config).await?;
         let node_id = endpoint.id();
+        let lan: Arc<dyn LanDiscovery> = match &config.lan {
+            LanMode::Mdns => match MdnsLan::start(endpoint.clone()).await {
+                Ok(mdns) => Arc::new(mdns),
+                Err(e) => {
+                    tracing::warn!(error = %e, "LAN discovery unavailable");
+                    Arc::new(NoLan)
+                }
+            },
+            LanMode::Off => Arc::new(NoLan),
+            #[cfg(any(test, feature = "test-support"))]
+            LanMode::Memory(bus) => Arc::new(bus.join(endpoint.clone())),
+        };
+        let lan_events = lan.events();
+        // A store that cannot be read must not make us visible.
+        let presence = match deps.settings.get_presence(&account) {
+            Ok(saved) => saved.unwrap_or(true),
+            Err(e) => {
+                tracing::warn!(error = %e, "presence unreadable; staying hidden");
+                false
+            }
+        };
+        if presence {
+            let name = deps.settings.get_display_name(&account).ok().flatten();
+            if let Err(e) = lan.set_advertise(true, name.as_ref()) {
+                tracing::warn!(error = %e, "could not advertise on the LAN");
+            }
+        }
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         let inner = Arc::new(Inner {
             endpoint: endpoint.clone(),
@@ -287,6 +362,9 @@ impl Node {
             limits: config.limits.clone(),
             expects_relay: config.expects_relay(),
             events,
+            lan,
+            lan_peers: Mutex::new(LanPeers::new(node_id)),
+            presence: Mutex::new(presence),
             state: Mutex::new(State {
                 flood: FloodGuard::new(config.limits.clone()),
                 handshakes: 0,
@@ -299,6 +377,7 @@ impl Node {
         inner.tickets.attach(endpoint);
         inner.runtime.spawn(accept_loop(inner.clone()));
         inner.runtime.spawn(watch_ticket(inner.clone()));
+        inner.runtime.spawn(lan_loop(inner.clone(), lan_events));
         tracing::debug!(node = %node_id.fmt_short(), "node started");
         Ok(Node { inner })
     }
@@ -377,6 +456,64 @@ impl Node {
             .collect()
     }
 
+    /// Whether our LAN record is published.
+    pub fn presence(&self) -> bool {
+        *self
+            .inner
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Persists the choice, then applies it. If either step fails the
+    /// advertising state and the saved value stay as they were. Browsing,
+    /// accepting and dialing are never affected.
+    pub fn set_presence(&self, on: bool) -> Result<(), PresenceError> {
+        let inner = &self.inner;
+        let mut current = inner
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let previous = *current;
+        inner
+            .settings
+            .set_presence(&inner.account, on)
+            .map_err(PresenceError::Settings)?;
+        let name = if on { inner.local_name() } else { None };
+        if let Err(e) = inner.lan.set_advertise(on, name.as_ref()) {
+            if let Err(restore) = inner.settings.set_presence(&inner.account, previous) {
+                tracing::warn!(error = %restore, "could not restore the saved presence");
+            }
+            return Err(PresenceError::Lan(e));
+        }
+        *current = on;
+        Ok(())
+    }
+
+    /// Peers currently seen on the LAN, sorted by NodeId. Memory only.
+    pub fn lan_peers(&self) -> Vec<LanPeer> {
+        self.inner
+            .lan_peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .snapshot()
+    }
+
+    /// Re-publishes our name on the LAN after a rename. Does nothing while
+    /// presence is OFF.
+    pub fn refresh_local_name(&self) {
+        let inner = &self.inner;
+        let current = inner
+            .presence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if *current {
+            if let Err(e) = inner.lan.set_advertise(true, inner.local_name().as_ref()) {
+                tracing::warn!(error = %e, "could not refresh the LAN name");
+            }
+        }
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<NetEvent> {
         self.inner.events.subscribe()
     }
@@ -416,6 +553,9 @@ impl Inner {
     async fn close(&self) {
         self.closing.store(true, Ordering::SeqCst);
         self.tickets.detach();
+        if let Err(e) = self.lan.set_advertise(false, None) {
+            tracing::debug!(error = %e, "could not withdraw the LAN record");
+        }
         {
             let mut state = self.state();
             state.pending.clear();
@@ -447,6 +587,9 @@ async fn build_endpoint(key: SecretKey, config: &NodeConfig) -> Result<Endpoint,
         }
         if let Some(lookup) = &config.lookup {
             builder = builder.address_lookup(lookup.clone());
+        }
+        if let Some(recorder) = &config.recorder {
+            builder = builder.address_lookup(recorder.clone());
         }
         if let Some(ca_tls) = &config.ca_tls {
             builder = builder.ca_tls_config(ca_tls.clone());
@@ -770,6 +913,39 @@ async fn watch_ticket(inner: Arc<Inner>) {
                 _ = sleep(TICKET_CHANGE_DEBOUNCE) => {}
                 _ = &mut closed => break,
             }
+        }
+    }
+}
+
+/// Feeds LAN observations through the registry and emits the visible list,
+/// at most once per [`LAN_EVENT_DEBOUNCE`].
+async fn lan_loop(inner: Arc<Inner>, mut events: tokio::sync::mpsc::Receiver<LanEvent>) {
+    let closed = inner.endpoint.closed();
+    tokio::pin!(closed);
+    let mut dirty = false;
+    let mut next_emit = tokio::time::Instant::now();
+    loop {
+        tokio::select! {
+            ev = events.recv() => {
+                let Some(ev) = ev else { break };
+                let changed = inner
+                    .lan_peers
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .apply(ev);
+                dirty |= changed;
+            }
+            _ = tokio::time::sleep_until(next_emit), if dirty => {
+                let snapshot = inner
+                    .lan_peers
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .snapshot();
+                inner.emit(NetEvent::LanPeersChanged(snapshot));
+                dirty = false;
+                next_emit = tokio::time::Instant::now() + LAN_EVENT_DEBOUNCE;
+            }
+            _ = &mut closed => break,
         }
     }
 }

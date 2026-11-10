@@ -5,7 +5,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::events::{ConnectionState, Direction, FailureReason, IncomingRequest, NetEvent};
-use crate::identity::NodeId;
+use super::lan::LanPeer;
+use crate::identity::{NodeId, Ticket};
 
 #[derive(Debug, Serialize)]
 pub struct MyTicketDto {
@@ -25,6 +26,34 @@ pub struct ConnectionStateDto {
     pub direction: &'static str,
     pub state: &'static str,
     pub reason: Option<&'static str>,
+}
+
+/// A peer on the LAN. `verified` is always false: the name is self-asserted.
+/// `ticket` is what the UI hands to the normal connect command.
+#[derive(Debug, Serialize)]
+pub struct LanPeerDto {
+    pub node_id: String,
+    pub display_name: Option<String>,
+    pub verified: bool,
+    pub ticket: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PresenceDto {
+    pub enabled: bool,
+}
+
+impl From<&LanPeer> for LanPeerDto {
+    fn from(peer: &LanPeer) -> Self {
+        Self {
+            node_id: peer.node_id.to_string(),
+            display_name: peer.display_name.as_ref().map(|n| n.as_str().to_owned()),
+            verified: false,
+            ticket: Ticket::from_endpoint_addr(&peer.addr)
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+        }
+    }
 }
 
 impl From<&IncomingRequest> for IncomingRequestDto {
@@ -84,6 +113,10 @@ pub fn event_json(ev: &NetEvent) -> (&'static str, Value) {
             to_value(&ConnectionStateDto::new(node_id, direction, state)),
         ),
         NetEvent::MyTicketChanged => ("my_ticket_changed", Value::Null),
+        NetEvent::LanPeersChanged(peers) => {
+            let dtos: Vec<LanPeerDto> = peers.iter().map(LanPeerDto::from).collect();
+            ("lan_peers_changed", to_value(&dtos))
+        }
     }
 }
 
@@ -96,6 +129,7 @@ fn to_value<T: Serialize>(dto: &T) -> Value {
 mod tests {
     use super::*;
     use crate::identity::validate_display_name;
+    use iroh_base::EndpointAddr;
     use serde_json::json;
 
     fn node_id(seed: u8) -> NodeId {
@@ -205,6 +239,39 @@ mod tests {
     }
 
     #[test]
+    fn lan_peer_dto_is_unverified_with_a_parseable_ticket() {
+        let peer = |seed: u8, name: Option<&str>| LanPeer {
+            node_id: node_id(seed),
+            display_name: name.map(|n| validate_display_name(n).unwrap()),
+            addr: EndpointAddr::new(node_id(seed)).with_ip_addr(([10, 0, 0, seed], 4000).into()),
+        };
+        let ev = NetEvent::LanPeersChanged(vec![peer(4, Some("Alice")), peer(5, None)]);
+        let (name, v) = event_json(&ev);
+        assert_eq!(name, "lan_peers_changed");
+        let list = v.as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["display_name"], "Alice");
+        assert_eq!(list[1]["display_name"], Value::Null);
+        for (entry, seed) in list.iter().zip([4u8, 5]) {
+            assert_eq!(entry["node_id"], node_id(seed).to_string());
+            assert_eq!(entry["verified"], false);
+            let parsed = Ticket::parse(entry["ticket"].as_str().unwrap()).unwrap();
+            assert_eq!(parsed.node_id, node_id(seed));
+        }
+        let mut keys: Vec<_> = list[0].as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["display_name", "node_id", "ticket", "verified"]);
+    }
+
+    #[test]
+    fn presence_dto_json_shape() {
+        assert_eq!(
+            serde_json::to_value(PresenceDto { enabled: true }).unwrap(),
+            json!({"enabled": true})
+        );
+    }
+
+    #[test]
     fn event_names_match_dd02_api_table() {
         let id = node_id(3);
         let events = [
@@ -218,6 +285,7 @@ mod tests {
                 state: ConnectionState::Connected,
             },
             NetEvent::MyTicketChanged,
+            NetEvent::LanPeersChanged(Vec::new()),
         ];
         for ev in &events {
             // Exhaustive: a new variant must be added here and to the table.
@@ -225,6 +293,7 @@ mod tests {
                 NetEvent::IncomingRequest(_) => "incoming_request",
                 NetEvent::ConnectionState { .. } => "connection_state",
                 NetEvent::MyTicketChanged => "my_ticket_changed",
+                NetEvent::LanPeersChanged(_) => "lan_peers_changed",
             };
             assert_eq!(event_json(ev).0, expected);
         }
