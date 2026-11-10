@@ -361,6 +361,22 @@ where
         })
     }
 
+    /// Loads the identity key for the transport layer. Crate-private: the key
+    /// is converted and dropped inside `core` and never reaches the app.
+    pub(crate) fn load_identity_secret(&self) -> Result<(AccountId, SecretKeyBytes), LoadError> {
+        let account_id = read_marker(&self.data_dir)
+            .map_err(|e| LoadError::Unavailable(e.into()))?
+            .ok_or(LoadError::NotProvisioned)?;
+        let identity_key = self
+            .keychain
+            .load_identity_key(&account_id)
+            .map_err(|e| LoadError::Unavailable(e.into()))?;
+        self.keychain
+            .load_db_key(&account_id)
+            .map_err(|e| LoadError::Unavailable(e.into()))?;
+        Ok((account_id, identity_key))
+    }
+
     /// `Ok(None)` only when the marker is absent; every other failure is an error.
     fn inspect(&self) -> Result<Option<LoadedIdentity>, StatusError> {
         let Some(account_id) = read_marker(&self.data_dir)? else {

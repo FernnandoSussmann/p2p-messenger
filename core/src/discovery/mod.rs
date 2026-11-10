@@ -20,3 +20,15 @@ pub use known_peers::{KnownPeers, KnownPeersError};
 // ── track A modules ──
 
 // ── track B modules ──
+mod hello;
+mod node;
+mod ticket_provider;
+
+pub use node::{
+    ConnectError, Node, NodeConfig, NodeDeps, RelayChoice, RespondError, StartError, CLOSE_BUSY,
+    CLOSE_DECLINED, CLOSE_PROTOCOL,
+};
+pub use ticket_provider::LiveTicketProvider;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;

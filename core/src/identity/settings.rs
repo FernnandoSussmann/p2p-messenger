@@ -46,6 +46,21 @@ pub trait SettingsStore {
     fn get_provisioned_at(&self, id: &AccountId) -> Result<Option<i64>, SettingsError>;
 }
 
+impl<T: SettingsStore + ?Sized> SettingsStore for std::sync::Arc<T> {
+    fn set_display_name(&self, id: &AccountId, name: &DisplayName) -> Result<(), SettingsError> {
+        (**self).set_display_name(id, name)
+    }
+    fn get_display_name(&self, id: &AccountId) -> Result<Option<DisplayName>, SettingsError> {
+        (**self).get_display_name(id)
+    }
+    fn set_provisioned_at(&self, id: &AccountId, unix_ms: i64) -> Result<(), SettingsError> {
+        (**self).set_provisioned_at(id, unix_ms)
+    }
+    fn get_provisioned_at(&self, id: &AccountId) -> Result<Option<i64>, SettingsError> {
+        (**self).get_provisioned_at(id)
+    }
+}
+
 #[derive(Default)]
 struct AccountSettings {
     display_name: Option<DisplayName>,
