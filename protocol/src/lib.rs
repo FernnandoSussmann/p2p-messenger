@@ -21,6 +21,12 @@ pub const PROTOCOL_VERSION: u16 = 1;
 /// connection, so peers only speak to others running this messenger.
 pub const ALPN: &[u8] = b"p2p-messenger/1";
 
+/// Upper bound, in bytes, for an encoded [`Hello`] envelope. Receivers read the
+/// first frame of a connection with this limit so an unauthenticated peer cannot
+/// make them buffer more. A maximum-length display name (128 code points of up
+/// to 4 UTF-8 bytes each) fits with room to spare.
+pub const MAX_HELLO_BYTES: usize = 1024;
+
 /// Stable, globally-unique identifier for a single chat message.
 ///
 /// Used to correlate a sent message with its [`Ack`] and to deduplicate on the
@@ -144,6 +150,15 @@ mod tests {
             let decoded = Envelope::decode(&env.encode().unwrap()).unwrap();
             assert_eq!(env, decoded);
         }
+    }
+
+    #[test]
+    fn max_length_hello_fits_within_max_hello_bytes() {
+        let env = Envelope::new(Payload::Hello(Hello {
+            display_name: "😀".repeat(128),
+        }));
+        let bytes = env.encode().unwrap();
+        assert!(bytes.len() <= MAX_HELLO_BYTES, "{} bytes", bytes.len());
     }
 
     #[test]

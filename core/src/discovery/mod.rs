@@ -1,0 +1,29 @@
+//! The `discovery` slice: the live iroh endpoint, tickets, the NodeId-based
+//! trust gate and connection events.
+//!
+//! Trust is keyed on the transport-verified NodeId only; the display name a
+//! peer announces in its `Hello` is advisory and never used as a key. Unknown
+//! peers are held behind an Accept/Decline prompt and get no traffic past
+//! `Hello` until accepted. [`event_json`] is the single mapping from a core
+//! event to its external name and JSON payload.
+
+mod dto;
+mod events;
+mod flood;
+mod hello;
+mod known_peers;
+mod node;
+mod ticket_provider;
+
+pub use dto::{event_json, ConnectionStateDto, IncomingRequestDto, MyTicketDto};
+pub use events::{ConnectionState, Direction, FailureReason, IncomingRequest, NetEvent};
+pub use flood::{Admission, FloodGuard, GateLimits};
+pub use known_peers::{FileKnownPeers, KnownPeers, KnownPeersError};
+pub use node::{
+    ConnectError, Node, NodeConfig, NodeDeps, RelayChoice, RespondError, StartError, CLOSE_BUSY,
+    CLOSE_DECLINED, CLOSE_PROTOCOL,
+};
+pub use ticket_provider::LiveTicketProvider;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;

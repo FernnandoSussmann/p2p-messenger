@@ -16,12 +16,12 @@ only once they carry real code — no empty stubs or placeholder modules.
 | Crate      | Status  | Responsibility                                               |
 | ---------- | ------- | ------------------------------------------------------------ |
 | `protocol` | present | Shared serde wire types (`Envelope`, `Payload`, …) + version |
-| `core`     | present | UI-agnostic logic by slice: identity, discovery, messaging…  |
+| `core`     | present | UI-agnostic logic by slice: `identity`, `discovery` (more to come) |
 | `app`      | present | Thin Tauri v2 + Svelte shell over `core`                     |
 
 ## Run the app
 
-Requires Rust, Node.js 20+, and the [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/)
+Requires Rust 1.95 or newer (the workspace MSRV), Node.js 20+, and the [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/)
 (on Debian/Ubuntu: `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev`).
 
 ```sh
@@ -35,10 +35,28 @@ because nothing serves the dev frontend.
 The app stores its keys in your OS keychain, so the first launch offers to
 create a real identity.
 
+### Connect two devices by ticket
+
+1. On device A open **My Info** and copy the ticket (the long live form that
+   carries the relay URL and current addresses).
+2. On device B open **Network**, paste it and press **Connect and remember this
+   device**.
+3. Device A shows an Accept/Decline prompt marked **Unverified** (the name is
+   self-asserted; trust is the NodeId). Accept, and both sides show Connected.
+
+Trust rule (interim, until DD-03 adds named contacts): a peer you dial is
+remembered once it has replied with its Hello, and may later connect to you
+without a prompt. Accepting an inbound request remembers that peer too.
+Declined or expired requests leave no trace. Known peers are kept per account
+in `known_peers.json` (public NodeIds and advisory names only).
+
+NAT traversal (hole punching, relay fallback) is provided by iroh; this app
+adds no traversal logic of its own. Relays only ever carry ciphertext.
+
 ## Build & test
 
 ```sh
-cargo test --workspace
+cargo test --workspace   # includes the Level-1 two-node tests (real iroh endpoints on loopback)
 cd app && npm ci && npm test && npm run check && npm run build
 ```
 
@@ -66,7 +84,8 @@ changing the hook.
 
 No Tauri WebDriver driver is available in this environment, so the first-run
 flow is automated at command-invoke level (`first_run_flow_end_to_end` in
-`app/src-tauri/src/identity_cmd.rs`) and component level (vitest). Check by
+`app/src-tauri/src/identity_cmd.rs`, `ticket_connect_accept_flow_end_to_end` in
+`app/src-tauri/src/net_cmd.rs`) and component level (vitest). Check by
 hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 
 1. First launch shows the wizard; empty or whitespace names are rejected.
@@ -74,6 +93,14 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 3. My Info shows name, full NodeId, ticket and QR; both copy buttons paste
    exactly the ticket / NodeId.
 4. Denying keychain access shows the blocking error screen, never the wizard.
+5. My Info shows the long live ticket (not just `p2pm:<nodeid>`); it updates
+   shortly after launch once the relay connects.
+6. Paste it on a second device (Network tab): the receiver gets an
+   Accept/Decline prompt marked Unverified, on whichever tab is open.
+7. Accept: both devices show Connected. Decline: the dialer shows Declined and
+   the receiver keeps no entry.
+8. Relaunch and reconnect from the same device: a known peer connects without
+   a prompt.
 
 ## License
 
