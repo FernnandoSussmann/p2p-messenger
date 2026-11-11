@@ -97,7 +97,11 @@ impl KnownPeers for SpyKnown {
         Ok(false)
     }
 
-    fn add(&self, _id: NodeId, _name: Option<DisplayName>) -> Result<(), KnownPeersError> {
+    fn remember_dialed(
+        &self,
+        _id: &NodeId,
+        _name: Option<&DisplayName>,
+    ) -> Result<(), KnownPeersError> {
         Ok(())
     }
 

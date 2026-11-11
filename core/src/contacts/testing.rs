@@ -9,6 +9,8 @@ use super::model::{Contact, NameUpdate, Nickname, TrustState};
 use super::store::{
     BatchReport, ContactStore, ContactStoreError, Ledger, MAX_CONTACTS_PER_ACCOUNT,
 };
+use crate::discovery::testing::KnownFactory;
+use crate::discovery::KnownPeers;
 use crate::identity::{AccountId, NodeId};
 
 /// In-memory store with the same contract as `FileContactStore`, including
@@ -253,6 +255,16 @@ impl BookCell {
             *slot.lock().unwrap() = Some(Arc::clone(&book));
             book
         }
+    }
+
+    /// [`factory`](Self::factory) as a discovery [`KnownFactory`].
+    pub fn known_factory(
+        &self,
+        store: Arc<dyn ContactStore>,
+        history: Arc<dyn HistoryEraser>,
+    ) -> KnownFactory {
+        let build = self.factory(store, history);
+        Arc::new(move |account, own| build(account, own) as Arc<dyn KnownPeers>)
     }
 
     /// The last book built.

@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::model::{Contact, Nickname, TrustState};
 use super::store::{ContactStore, ContactStoreError};
-use crate::identity::{validate_display_name, AccountId, DisplayName, NodeId};
+use crate::identity::{validate_display_name, AccountId, DisplayName, DisplayNameError, NodeId};
 
 const LEGACY_FILE_NAME: &str = "known_peers.json";
 const LEGACY_VERSION: u32 = 1;
@@ -59,9 +59,11 @@ struct LegacyDocument {
 fn legacy_name(raw: Option<&str>) -> Result<Option<DisplayName>, MigrationError> {
     match raw {
         None => Ok(None),
-        Some(raw) => validate_display_name(raw)
-            .map(Some)
-            .map_err(|_| MigrationError::LegacyCorrupt),
+        Some(raw) => match validate_display_name(raw) {
+            Ok(name) => Ok(Some(name)),
+            Err(DisplayNameError::InvisibleCharacter) => Ok(None),
+            Err(_) => Err(MigrationError::LegacyCorrupt),
+        },
     }
 }
 

@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::events::{ConnectionState, Direction, FailureReason, IncomingRequest, NetEvent};
 use super::lan::LanPeer;
+use crate::contacts::Nickname;
 use crate::identity::{DisplayName, NodeId, Ticket};
 
 #[derive(Debug, Serialize)]
@@ -18,6 +19,8 @@ pub struct MyTicketDto {
 pub struct IncomingRequestDto {
     pub node_id: String,
     pub display_name: Option<String>,
+    /// The Accept prefill: the only source, so no frontend derives it.
+    pub suggested_nickname: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,6 +65,9 @@ impl From<&IncomingRequest> for IncomingRequestDto {
         Self {
             node_id: req.node_id.to_string(),
             display_name: req.display_name.as_ref().map(|n| n.as_str().to_owned()),
+            suggested_nickname: Nickname::default_for(&req.node_id, req.display_name.as_ref())
+                .as_str()
+                .to_owned(),
         }
     }
 }
@@ -158,14 +164,24 @@ mod tests {
         });
         let (name, v) = event_json(&with_name);
         assert_eq!(name, "incoming_request");
-        assert_eq!(v, json!({"node_id": id.to_string(), "display_name": "Ada"}));
+        assert_eq!(
+            v,
+            json!({"node_id": id.to_string(), "display_name": "Ada", "suggested_nickname": "Ada"})
+        );
 
         let no_name = NetEvent::IncomingRequest(IncomingRequest {
             node_id: id,
             display_name: None,
         });
         let (_, v) = event_json(&no_name);
-        assert_eq!(v, json!({"node_id": id.to_string(), "display_name": null}));
+        assert_eq!(
+            v,
+            json!({
+                "node_id": id.to_string(),
+                "display_name": null,
+                "suggested_nickname": format!("Peer {}", id.fmt_short())
+            })
+        );
     }
 
     #[test]

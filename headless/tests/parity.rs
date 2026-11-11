@@ -118,6 +118,7 @@ impl NodeDriver for HeadlessDriver {
         self.ok(Request::Respond {
             node_id: node_id.to_owned(),
             accept,
+            nickname: None,
         })
         .await
         .map(drop)

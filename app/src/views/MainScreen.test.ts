@@ -51,11 +51,11 @@ describe("MainScreen", () => {
   });
 
   it("shows a seeded prompt on both tabs", async () => {
-    vi.mocked(netPendingIncoming).mockResolvedValue([{ node_id: "peer-1", display_name: "Eve" }]);
+    vi.mocked(netPendingIncoming).mockResolvedValue([{ node_id: "peer-1", display_name: "Eve", suggested_nickname: "Eve" }]);
     render(MainScreen);
-    expect(await screen.findByRole("button", { name: "Accept" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /Accept/ })).toBeTruthy();
     await fireEvent.click(screen.getByRole("tab", { name: "Network" }));
-    expect(screen.getByRole("button", { name: "Accept" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Accept/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
   });
 

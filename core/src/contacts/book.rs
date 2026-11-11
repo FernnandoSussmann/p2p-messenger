@@ -8,6 +8,7 @@ use super::model::{
     Contact, ContactError, HistoryChoice, NameUpdate, Nickname, Removal, TrustState,
 };
 use super::store::{ContactStore, ContactStoreError};
+use crate::discovery::{KnownPeers, KnownPeersError, NameSource};
 use crate::identity::{AccountId, DisplayName, NodeId};
 
 impl From<ContactStoreError> for ContactError {
@@ -21,13 +22,42 @@ impl From<ContactStoreError> for ContactError {
     }
 }
 
+impl KnownPeers for ContactBook {
+    fn is_known(&self, id: &NodeId) -> Result<bool, KnownPeersError> {
+        ContactBook::is_known(self, id).map_err(|_| KnownPeersError)
+    }
+
+    fn observe(
+        &self,
+        id: &NodeId,
+        name: Option<&DisplayName>,
+        source: NameSource,
+    ) -> Result<(), KnownPeersError> {
+        match (source, name) {
+            (NameSource::Lan, None) => Ok(()),
+            (NameSource::Lan, Some(name)) => self.observe_lan(id, name),
+            (NameSource::Hello, name) => self.observe_hello(id, name),
+        }
+        .map_err(|_| KnownPeersError)
+    }
+
+    fn remember_dialed(
+        &self,
+        id: &NodeId,
+        name: Option<&DisplayName>,
+    ) -> Result<(), KnownPeersError> {
+        ContactBook::remember_dialed(self, *id, name).map_err(|_| KnownPeersError)
+    }
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64)
 }
 
-/// Trust reads the NodeId only; names are never compared, looked up or used
+/// Also the production [`KnownPeers`] store: the gate and the
+/// `contacts_is_known` command share [`ContactBook::is_known`]. Trust reads the NodeId only; names are never compared, looked up or used
 /// for dedup.
 pub struct ContactBook {
     account: AccountId,

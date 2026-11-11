@@ -12,7 +12,9 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
 use super::{restart, spawn_test_node_wrapped, SettingsWrapper, TestNode, TestOptions};
-use crate::discovery::{event_json, FileKnownPeers};
+use crate::contacts::testing::BookCell;
+use crate::contacts::{accept_incoming, FileContactStore, Nickname, NoMessageStore};
+use crate::discovery::event_json;
 use crate::identity::{
     AccountId, DisplayName, FileSettingsStore, MemorySettingsStore, SettingsError, SettingsStore,
 };
@@ -186,10 +188,11 @@ impl SettingsStore for FilePresence {
 
 type EventBuffer = Arc<Mutex<VecDeque<(&'static str, Value)>>>;
 
-/// A [`NodeDriver`] over an in-process [`TestNode`]. Known peers and presence
+/// A [`NodeDriver`] over an in-process [`TestNode`]. Contacts and presence
 /// are file-backed, so they survive [`NodeDriver::restart`].
 pub struct InProcessDriver {
     node: Option<TestNode>,
+    book: BookCell,
     _store: TempDir,
     events: EventBuffer,
     pump: Option<JoinHandle<()>>,
@@ -198,7 +201,9 @@ pub struct InProcessDriver {
 impl InProcessDriver {
     pub async fn new(name: &str) -> Self {
         let store = TempDir::new().expect("temp dir");
-        let known = Arc::new(FileKnownPeers::new(store.path(), AccountId::new()));
+        let book = BookCell::new();
+        let contacts = Arc::new(FileContactStore::new(store.path()));
+        let known = book.known_factory(contacts, Arc::new(NoMessageStore));
         let dir = store.path().to_path_buf();
         let wrapper: SettingsWrapper = Arc::new(move |inner| {
             Arc::new(FilePresence {
@@ -206,10 +211,11 @@ impl InProcessDriver {
                 file: FileSettingsStore::new(&dir),
             })
         });
-        let options = TestOptions::default().with_known(known);
+        let options = TestOptions::default().with_known_factory(known);
         let node = spawn_test_node_wrapped(name, options, Some(wrapper)).await;
         let mut driver = Self {
             node: Some(node),
+            book,
             _store: store,
             events: EventBuffer::default(),
             pump: None,
@@ -272,10 +278,17 @@ impl NodeDriver for InProcessDriver {
 
     async fn respond(&self, node_id: &str, accept: bool) -> Result<(), String> {
         let peer = node_id.parse().map_err(|_| "invalid node id".to_owned())?;
-        self.node()
-            .node
-            .respond_incoming(&peer, accept)
-            .map_err(|e| e.to_string())
+        let node = &self.node().node;
+        if !accept {
+            return node
+                .respond_incoming(&peer, false)
+                .map_err(|e| e.to_string());
+        }
+        let name = node.pending_request(&peer).and_then(|r| r.display_name);
+        let nickname = Nickname::default_for(&peer, name.as_ref());
+        accept_incoming(&self.book.get(), node, &peer, nickname.as_str())
+            .map(|_| ())
+            .map_err(|e| format!("{e:?}"))
     }
 
     async fn set_presence(&self, on: bool) -> Result<bool, String> {
