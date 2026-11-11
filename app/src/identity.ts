@@ -22,7 +22,8 @@ export type DisplayNameKind =
   | "Empty"
   | "TooLong"
   | "ControlCharacter"
-  | "BidiOverride";
+  | "BidiOverride"
+  | "InvisibleCharacter";
 
 export type IdentityCmdError =
   | { type: "AlreadyProvisioned" }
