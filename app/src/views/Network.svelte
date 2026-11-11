@@ -1,4 +1,6 @@
 <script lang="ts">
+  import PresenceToggle from "./PresenceToggle.svelte";
+  import LanPeers from "./LanPeers.svelte";
   import { connections } from "../lib/netStore";
   import { netConnectTicket, describeNetError } from "../net";
 
@@ -27,6 +29,8 @@
 
 <section>
   <h2>Network</h2>
+  <PresenceToggle />
+  <LanPeers />
   <form onsubmit={connect}>
     <label>
       Connect by ticket

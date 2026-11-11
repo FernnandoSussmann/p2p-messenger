@@ -197,9 +197,10 @@ pub fn identity_provision(
 #[tauri::command]
 pub fn identity_set_display_name(
     service: State<'_, AppIdentity>,
+    net: State<'_, net_cmd::NetState>,
     name: String,
 ) -> Result<(), IdentityCmdError> {
-    set_display_name(&service, &name)
+    net_cmd::set_display_name_and_refresh(&service, &net, &name)
 }
 
 #[tauri::command]

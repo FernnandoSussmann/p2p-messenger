@@ -16,7 +16,7 @@ only once they carry real code — no empty stubs or placeholder modules.
 | Crate      | Status  | Responsibility                                               |
 | ---------- | ------- | ------------------------------------------------------------ |
 | `protocol` | present | Shared serde wire types (`Envelope`, `Payload`, …) + version |
-| `core`     | present | UI-agnostic logic by slice: `identity`, `discovery` (more to come) |
+| `core`     | present | UI-agnostic logic by slice: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence; more to come) |
 | `app`      | present | Thin Tauri v2 + Svelte shell over `core`                     |
 
 ## Run the app
@@ -52,6 +52,27 @@ in `known_peers.json` (public NodeIds and advisory names only).
 
 NAT traversal (hole punching, relay fallback) is provided by iroh; this app
 adds no traversal logic of its own. Relays only ever carry ciphertext.
+
+### Peers on this network, presence and relay
+
+The **Network** tab lists peers found on the local network via mDNS. Entries are
+always marked **Unverified**: the name is self-asserted, only the NodeId counts.
+Picking one runs the same connect and Accept/Decline gate as a pasted ticket.
+Discovered peers are kept in memory only, never on disk.
+
+**Visible on this network** (default on, saved per account) controls only
+whether *you* advertise on the LAN. Off hides you from other devices' LAN lists
+and withdraws your display name from the mDNS record; you still browse, and
+anyone holding your ticket can still connect. It does not make you offline:
+iroh's internet address lookup keeps publishing your addresses (never your
+name) for ticket holders.
+
+Relay override: set `MESSENGER_RELAY_URL` at launch to use your own relay
+(`https`, or `http` for a loopback host only), or `default` to go back to the
+default relay mesh. The value is saved per account and applied when the node
+starts; an invalid value stops the app from starting. There is no GUI editor in
+v1. Relays see NodeIds, addresses and timing, never plaintext; self-hosting a
+relay is the way to keep that metadata off shared infrastructure.
 
 ## Build & test
 
@@ -101,6 +122,54 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
    the receiver keeps no entry.
 8. Relaunch and reconnect from the same device: a known peer connects without
    a prompt.
+9. Two instances (see Two-device simulation): each appears in the other's
+   Peers on this network list as Unverified, with its full NodeId. Connect from
+   the list: the other side gets the Accept/Decline prompt.
+10. Turn Visible on this network off: the peer disappears from the other
+    list within seconds, the other still shows in yours, and a ticket connect
+    to you still works. Turn it on: you reappear with your current name.
+11. Rename yourself while visible: the other instance shows the new name.
+12. `MESSENGER_PROFILE=../x` or `MESSENGER_RELAY_URL=bad` refuses to start.
+
+## Two-device simulation
+
+**Level 1** (in-process, runs in the pre-commit gate): `cargo test --workspace`
+drives two real iroh nodes over loopback, with an in-process LAN bus standing in
+for multicast. The real mDNS test is opt-in because it needs a
+multicast-capable interface:
+
+```sh
+cargo test -p core --test discovery_lan -- --ignored
+```
+
+**Level 2** (two full app instances on one machine): `--profile <name>` or
+`MESSENGER_PROFILE=<name>` (`[a-z0-9-]`, 1-32 chars, not `default`; the command
+line wins) gives an instance its own data directory (`<app data>/profiles/<name>`)
+and keychain entries, and adds "profile <name>" to the window title. An invalid
+name stops the app from starting; it never falls back to the default identity.
+The default (no profile) data and keychain are unchanged.
+
+`tauri dev` twice would clash on the Vite port 1420, so run one dev instance and
+start the second from the already built debug binary, which loads the same dev
+server:
+
+```sh
+MESSENGER_PROFILE=a npm start                      # terminal 1: dev server + instance A
+cargo build -p app                                 # once, if target/debug/app is missing
+MESSENGER_PROFILE=b ./target/debug/app             # terminal 2: instance B
+```
+
+Then: complete first-run on each, find the other in **Peers on this network**
+(or paste its ticket), Accept on the other side, see Connected, then turn
+**Visible on this network** off on one: it vanishes from the other's list but
+can still be connected to by ticket.
+
+Same-host mDNS discovery needs a multicast-capable, non-loopback interface
+(normal Wi-Fi or Ethernet). On a machine with only loopback, or with multicast
+blocked by a VPN or firewall, the LAN list may stay empty; use the ticket path.
+
+The profile override only relocates state. It never disables a prompt, trust
+check or any other control.
 
 ## License
 

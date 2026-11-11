@@ -1,7 +1,14 @@
 import { writable } from "svelte/store";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { netPendingIncoming, type ConnectionStateDto, type IncomingRequestDto } from "../net";
+import {
+  netLanPeers,
+  netPendingIncoming,
+  type ConnectionStateDto,
+  type IncomingRequestDto,
+  type LanPeerDto,
+} from "../net";
 
+export const lanPeers = writable<LanPeerDto[]>([]);
 export const incomingRequests = writable<IncomingRequestDto[]>([]);
 export const connections = writable<Record<string, ConnectionStateDto>>({});
 
@@ -30,7 +37,13 @@ export async function startNetEvents(): Promise<() => void> {
   const unlisteners: UnlistenFn[] = [
     await listen<IncomingRequestDto>("incoming_request", (e) => enqueue(e.payload)),
     await listen<ConnectionStateDto>("connection_state", (e) => applyConnectionState(e.payload)),
+    await listen<LanPeerDto[]>("lan_peers_changed", (e) => lanPeers.set(e.payload)),
   ];
+  try {
+    lanPeers.set(await netLanPeers());
+  } catch {
+    // Not ready yet: lan_peers_changed events supply the snapshot.
+  }
   try {
     for (const req of await netPendingIncoming()) enqueue(req);
   } catch {

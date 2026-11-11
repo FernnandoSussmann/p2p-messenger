@@ -5,6 +5,8 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/sv
 vi.mock("../net", async (orig) => ({
   ...(await orig<typeof import("../net")>()),
   netConnectTicket: vi.fn(),
+  netPresenceGet: vi.fn().mockResolvedValue({ enabled: true }),
+  netPresenceSet: vi.fn(),
 }));
 
 import Network from "./Network.svelte";

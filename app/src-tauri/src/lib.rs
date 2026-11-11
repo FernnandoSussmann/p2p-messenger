@@ -3,6 +3,7 @@
 
 mod identity_cmd;
 mod net_cmd;
+mod profile;
 #[cfg(test)]
 mod test_util;
 
@@ -13,12 +14,15 @@ use messenger_core::discovery::LiveTicketProvider;
 use messenger_core::identity::{FileSettingsStore, IdentityService, IdentityStatus, OsKeychain};
 use tauri::{Manager, RunEvent};
 
+const APP_TITLE: &str = "p2p-messenger";
+
 use identity_cmd::{
     identity_my_info, identity_provision, identity_set_display_name, identity_status, AppIdentity,
 };
 use net_cmd::{
-    ensure_started, net_connect_ticket, net_my_ticket, net_pending_incoming, net_respond_incoming,
-    NetBoot, NetState,
+    ensure_started, net_connect_ticket, net_lan_peers, net_my_ticket, net_pending_incoming,
+    net_presence_get, net_presence_set, net_respond_incoming, relay_override_from_env, NetBoot,
+    NetState,
 };
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -27,7 +31,14 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+            let profile = profile::profile_from(
+                std::env::args().skip(1),
+                std::env::var("MESSENGER_PROFILE").ok(),
+            )
+            .map_err(|e| format!("invalid profile: {e}"))?;
+            let relay = relay_override_from_env(std::env::var("MESSENGER_RELAY_URL").ok())?;
+            let layout = profile::layout(&app.path().app_data_dir()?, profile);
+            let data_dir = layout.data_dir;
             std::fs::create_dir_all(&data_dir)?;
             #[cfg(unix)]
             {
@@ -38,14 +49,17 @@ pub fn run() {
             let settings = Arc::new(FileSettingsStore::new(data_dir.clone()));
             let tickets = LiveTicketProvider::new();
             let service: AppIdentity = IdentityService::new(
-                OsKeychain::native()?,
+                OsKeychain::native_for(layout.profile.as_ref())?,
                 Arc::clone(&settings),
                 tickets.clone(),
                 data_dir.clone(),
             );
             let present = matches!(service.status(), IdentityStatus::Present { .. });
             app.manage(service);
-            app.manage(NetState::default());
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_title(&profile::window_title(APP_TITLE, layout.profile.as_ref()))?;
+            }
+            app.manage(NetState::new(relay));
             app.manage(NetBoot {
                 data_dir,
                 settings,
@@ -64,7 +78,10 @@ pub fn run() {
             net_my_ticket,
             net_connect_ticket,
             net_respond_incoming,
-            net_pending_incoming
+            net_pending_incoming,
+            net_presence_get,
+            net_presence_set,
+            net_lan_peers
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

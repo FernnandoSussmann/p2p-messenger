@@ -14,6 +14,7 @@ tauri-build.workspace = true
 
 [dependencies]
 messenger_core = { package = "core", path = "../../core" }
+iroh.workspace = true
 tauri.workspace = true
 tauri-plugin-clipboard-manager.workspace = true
 serde.workspace = true

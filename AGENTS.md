@@ -55,6 +55,8 @@ fix the failure instead.
 - Workspace Rust edition 2021, MSRV 1.95. Follow `rustfmt` defaults.
 - Frontend: Svelte 5 + TypeScript, built with Vite; tests with Vitest + Testing Library.
 
+- **Profile override:** `--profile <name>` / `MESSENGER_PROFILE` isolates the data dir and keychain namespace so two instances run on one machine. It is a dev/test affordance, fails closed on an invalid name, and must never weaken or skip any control (trust prompt, presence, keychain). `MESSENGER_RELAY_URL` sets the stored relay at launch.
+
 ## Security rules (enforced; do not weaken)
 
 - Private keys and the SQLCipher key live in the OS keychain (`keyring`). Secret types (`SecretKeyBytes`, `DbKey`) are zeroized and must **never** cross into `app/` — the pre-commit hook greps for these names under `app/`, so do not reference them there, even in types or comments.

@@ -13,10 +13,10 @@ vi.mock("@tauri-apps/api/event", () => ({
     return u;
   }),
 }));
-vi.mock("../net", () => ({ netPendingIncoming: vi.fn() }));
+vi.mock("../net", () => ({ netPendingIncoming: vi.fn(), netLanPeers: vi.fn() }));
 
-import { startNetEvents, incomingRequests, connections } from "./netStore";
-import { netPendingIncoming } from "../net";
+import { startNetEvents, incomingRequests, connections, lanPeers } from "./netStore";
+import { netPendingIncoming, netLanPeers } from "../net";
 
 const req = (id: string, name: string | null = "Eve") => ({ node_id: id, display_name: name });
 const conn = (id: string, direction: "inbound" | "outbound", state: string, reason: string | null = null) => ({
@@ -29,8 +29,10 @@ const conn = (id: string, direction: "inbound" | "outbound", state: string, reas
 beforeEach(() => {
   incomingRequests.set([]);
   connections.set({});
+  lanPeers.set([]);
   unlisteners.length = 0;
   vi.mocked(netPendingIncoming).mockReset().mockResolvedValue([]);
+  vi.mocked(netLanPeers).mockReset().mockResolvedValue([]);
 });
 
 describe("netStore", () => {
@@ -50,10 +52,27 @@ describe("netStore", () => {
     expect(get(connections).a.state).toBe("connected");
   });
 
-  it("calls unlisten for both listeners", async () => {
+  it("seeds lanPeers and replaces the snapshot on lan_peers_changed", async () => {
+    const peer = (id: string) => ({ node_id: id, display_name: null, verified: false, ticket: `t-${id}` });
+    vi.mocked(netLanPeers).mockResolvedValue([peer("a")]);
+    await startNetEvents();
+    expect(get(lanPeers).map((p) => p.node_id)).toEqual(["a"]);
+    handlers.lan_peers_changed({ payload: [peer("b"), peer("c")] });
+    expect(get(lanPeers).map((p) => p.node_id)).toEqual(["b", "c"]);
+    handlers.lan_peers_changed({ payload: [] });
+    expect(get(lanPeers)).toEqual([]);
+  });
+
+  it("tolerates a failing lan peers snapshot", async () => {
+    vi.mocked(netLanPeers).mockRejectedValue({ type: "NotReady" });
+    await expect(startNetEvents()).resolves.toBeTypeOf("function");
+    expect(get(lanPeers)).toEqual([]);
+  });
+
+  it("calls unlisten for every listener", async () => {
     const stop = await startNetEvents();
     stop();
-    expect(unlisteners).toHaveLength(2);
+    expect(unlisteners).toHaveLength(3);
     unlisteners.forEach((u) => expect(u).toHaveBeenCalledTimes(1));
   });
 
