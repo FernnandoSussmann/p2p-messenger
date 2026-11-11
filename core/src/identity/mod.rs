@@ -5,6 +5,7 @@
 //! or to the NodeId, so it reveals nothing about the user.
 
 mod display_name;
+mod emoji;
 mod keychain;
 mod keygen;
 mod marker;

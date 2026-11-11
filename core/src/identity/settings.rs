@@ -28,7 +28,7 @@ use std::sync::Mutex;
 use iroh::RelayUrl;
 use serde::{Deserialize, Serialize};
 
-use super::{validate_display_name, AccountId, DisplayName};
+use super::{validate_display_name, AccountId, DisplayName, DisplayNameError};
 
 #[derive(Debug)]
 pub enum SettingsError {
@@ -325,9 +325,12 @@ impl SettingsStore for FileSettingsStore {
 
     fn get_display_name(&self, id: &AccountId) -> Result<Option<DisplayName>, SettingsError> {
         self.read_account(id, |a| match a.and_then(|a| a.display_name.as_deref()) {
-            Some(raw) => validate_display_name(raw)
-                .map(Some)
-                .map_err(|_| SettingsError::Unavailable),
+            Some(raw) => match validate_display_name(raw) {
+                Ok(name) => Ok(Some(name)),
+                // Saved under older, looser rules: treat as unset, never brick startup.
+                Err(DisplayNameError::InvisibleCharacter) => Ok(None),
+                Err(_) => Err(SettingsError::Unavailable),
+            },
             None => Ok(None),
         })
     }
@@ -722,6 +725,29 @@ mod tests {
                 "should fail: {bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn stored_name_now_invisible_reads_as_unset() {
+        let (dir, store) = file_store();
+        let id = AccountId::new();
+        let doc = serde_json::json!({
+            "version": 1,
+            "accounts": { id.as_uuid().hyphenated().to_string(): {
+                "display_name": "Ada\u{200B}",
+                "presence_enabled": false,
+                "relay_url": "https://relay.example"
+            } }
+        })
+        .to_string();
+        fs::write(settings_path(&dir), &doc).unwrap();
+        assert!(store.get_display_name(&id).unwrap().is_none());
+        assert_eq!(store.get_presence(&id).unwrap(), Some(false));
+        assert_eq!(
+            store.get_relay_url(&id).unwrap().as_deref(),
+            Some("https://relay.example/")
+        );
+        assert_eq!(fs::read_to_string(settings_path(&dir)).unwrap(), doc);
     }
 
     #[test]
