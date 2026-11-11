@@ -7,7 +7,23 @@ vi.mock("../net", async (orig) => ({
   netConnectTicket: vi.fn(),
 }));
 
+vi.mock("../contacts", async (orig) => ({
+  ...(await orig<typeof import("../contacts")>()),
+  contactsAdd: vi.fn(),
+}));
+vi.mock("../lib/contactsStore", async () => {
+  const { writable, derived } = await import("svelte/store");
+  const contacts = writable<{ node_id: string }[]>([]);
+  return {
+    contacts,
+    contactIds: derived(contacts, (c) => new Set(c.map((x) => x.node_id))),
+    refreshContacts: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 import LanPeers from "./LanPeers.svelte";
+import { contactsAdd } from "../contacts";
+import { contacts, refreshContacts } from "../lib/contactsStore";
 import { lanPeers } from "../lib/netStore";
 import { netConnectTicket } from "../net";
 
@@ -21,21 +37,32 @@ const peer = (id: string, name: string | null, ticket = `t-${id}`) => ({
 afterEach(cleanup);
 beforeEach(() => {
   lanPeers.set([]);
+  (contacts as any).set([]);
+  vi.mocked(contactsAdd).mockReset().mockResolvedValue({} as never);
+  vi.mocked(refreshContacts).mockClear();
   vi.mocked(netConnectTicket).mockReset().mockResolvedValue({ node_id: "x" });
 });
 
 describe("LanPeers", () => {
   it("shows the empty state", () => {
     render(LanPeers);
-    expect(screen.getByText("No peers found on this network.")).toBeInTheDocument();
+    expect(screen.getByText("No one new on this network.")).toBeInTheDocument();
   });
 
-  it("renders name, Unverified badge and full NodeId", () => {
-    lanPeers.set([peer("a".repeat(64), "Alice")]);
+  it("hides peers that are already contacts", () => {
+    lanPeers.set([peer("c1", "Carol"), peer("n1", "Nina")]);
+    (contacts as any).set([{ node_id: "c1" }]);
     render(LanPeers);
-    expect(screen.getByText("Alice")).toBeInTheDocument();
-    expect(screen.getByText("Unverified")).toBeInTheDocument();
-    expect(screen.getByText("a".repeat(64))).toBeInTheDocument();
+    expect(screen.getAllByTestId("lan-peer")).toHaveLength(1);
+    expect(screen.getByText("Nina")).toBeInTheDocument();
+    expect(screen.queryByText("Carol")).toBeNull();
+  });
+
+  it("always shows Unverified even if the DTO says verified", () => {
+    lanPeers.set([{ ...peer("n1", "Eve"), verified: true }]);
+    render(LanPeers);
+    expect(screen.getByTestId("badge-unverified")).toBeInTheDocument();
+    expect(screen.queryByTestId("badge-verified")).toBeNull();
   });
 
   it("shows (no name) when the peer has none", () => {
@@ -53,25 +80,57 @@ describe("LanPeers", () => {
   });
 
   it("renders HTML and bidi names inert", () => {
-    const evil = "<img src=x onerror=alert(1)>‮evil";
+    const evil = "<img src=x onerror=alert(1)>\u202eevil";
     lanPeers.set([peer("n1", evil)]);
     const { container } = render(LanPeers);
     expect(container.querySelector("img")).toBeNull();
     expect(screen.getByTestId("lan-peer-name").textContent).toBe(evil);
   });
 
-  it("connects with that peer's ticket", async () => {
-    lanPeers.set([peer("id-1", "Bob", "ticket-1"), peer("id-2", "Bob", "ticket-2")]);
+  it("nickname field is not prefilled", async () => {
+    lanPeers.set([peer("n1", "Bob")]);
     render(LanPeers);
-    await fireEvent.click(screen.getAllByRole("button", { name: "Connect" })[1]);
-    await waitFor(() => expect(netConnectTicket).toHaveBeenCalledWith("ticket-2"));
+    await fireEvent.click(screen.getByRole("button", { name: "Add…" }));
+    expect((screen.getByLabelText("Your name for them") as HTMLInputElement).value).toBe("");
+    expect(screen.getByRole("button", { name: "Add contact and connect" })).toBeDisabled();
   });
 
-  it("shows the connect error", async () => {
-    vi.mocked(netConnectTicket).mockRejectedValue({ type: "SelfDial" });
-    lanPeers.set([peer("id-1", "Bob")]);
+  async function submit(nick: string) {
+    await fireEvent.click(screen.getAllByRole("button", { name: "Add…" })[1]);
+    await fireEvent.input(screen.getByLabelText("Your name for them"), { target: { value: nick } });
+    await fireEvent.click(screen.getByRole("button", { name: "Add contact and connect" }));
+  }
+
+  it("Add sends the typed nickname then dials the peer's ticket", async () => {
+    lanPeers.set([peer("id-1", "Bob", "ticket-1"), peer("id-2", "Bob", "ticket-2")]);
     render(LanPeers);
-    await fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("That's your own ticket.");
+    await submit("Bobby");
+    await waitFor(() => expect(netConnectTicket).toHaveBeenCalledWith("ticket-2"));
+    expect(contactsAdd).toHaveBeenCalledWith("id-2", "Bobby");
+    const order = [
+      vi.mocked(contactsAdd).mock.invocationCallOrder[0],
+      vi.mocked(refreshContacts).mock.invocationCallOrder[0],
+      vi.mocked(netConnectTicket).mock.invocationCallOrder[0],
+    ];
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it("Add failure does not dial", async () => {
+    vi.mocked(contactsAdd).mockRejectedValue({ type: "Full" });
+    lanPeers.set([peer("id-1", "Bob"), peer("id-2", "Bob")]);
+    render(LanPeers);
+    await submit("Bobby");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your contact list is full.");
+    expect(netConnectTicket).not.toHaveBeenCalled();
+  });
+
+  it("dial failure after add reports both facts", async () => {
+    vi.mocked(netConnectTicket).mockRejectedValue({ type: "SelfDial" });
+    lanPeers.set([peer("id-1", "Bob"), peer("id-2", "Bob")]);
+    render(LanPeers);
+    await submit("Bobby");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Added “Bobby”, but connecting failed: That's your own ticket.",
+    );
   });
 });

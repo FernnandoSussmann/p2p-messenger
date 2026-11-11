@@ -7,6 +7,9 @@ vi.mock("../net", async (importOriginal) => ({
   netRespondIncoming: vi.fn(),
 }));
 
+vi.mock("../lib/contactsStore", () => ({ refreshContacts: vi.fn().mockResolvedValue(undefined) }));
+
+import { refreshContacts } from "../lib/contactsStore";
 import IncomingRequestPrompt from "./IncomingRequestPrompt.svelte";
 import { incomingRequests, connections } from "../lib/netStore";
 import { netRespondIncoming } from "../net";
@@ -16,6 +19,7 @@ beforeEach(() => {
   vi.mocked(netRespondIncoming).mockReset().mockResolvedValue(undefined);
   incomingRequests.set([]);
   connections.set({});
+  vi.mocked(refreshContacts).mockClear();
 });
 
 const req = (id: string, name: string | null, suggested = name ?? "Peer abc…") => ({
@@ -35,7 +39,7 @@ describe("IncomingRequestPrompt", () => {
   it("shows UNVERIFIED and the full NodeId", () => {
     incomingRequests.set([req("node-full-id-1", "Eve")]);
     render(IncomingRequestPrompt);
-    expect(screen.getByTestId("unverified-badge")).toHaveTextContent("Unverified");
+    expect(screen.getByTestId("badge-unverified")).toHaveTextContent("Unverified");
     expect(screen.getByTestId("peer-node-id")).toHaveTextContent("node-full-id-1");
   });
 
@@ -84,6 +88,19 @@ describe("IncomingRequestPrompt", () => {
     await fireEvent.click(accept());
     expect(netRespondIncoming).toHaveBeenLastCalledWith("n1", true, "Bobby");
     await waitFor(() => expect(screen.queryByTestId("incoming-prompt")).toBeNull());
+  });
+
+  it("successful accept refreshes contacts", async () => {
+    incomingRequests.set([req("n1", "Eve", "Eve")]);
+    render(IncomingRequestPrompt);
+    await fireEvent.click(accept());
+    await waitFor(() => expect(refreshContacts).toHaveBeenCalledTimes(1));
+  });
+
+  it("prefill still comes from suggested_nickname", () => {
+    incomingRequests.set([req("n1", "Eve", "Evie")]);
+    render(IncomingRequestPrompt);
+    expect(field().value).toBe("Evie");
   });
 
   it("clearing the field disables Accept", async () => {

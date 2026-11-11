@@ -1,7 +1,9 @@
 <script lang="ts">
   import { incomingRequests, dropIncoming } from "../lib/netStore";
   import { describeNetError, netRespondIncoming } from "../net";
+  import { refreshContacts } from "../lib/contactsStore";
   import NicknameForm from "./NicknameForm.svelte";
+  import TrustBadge from "./TrustBadge.svelte";
 
   const first = $derived($incomingRequests[0]);
   const more = $derived($incomingRequests.length - 1);
@@ -17,8 +19,10 @@
     busy = true;
     error = null;
     try {
-      if (accept) await netRespondIncoming(nodeId, true, nickname);
-      else await netRespondIncoming(nodeId, false);
+      if (accept) {
+        await netRespondIncoming(nodeId, true, nickname);
+        await refreshContacts();
+      } else await netRespondIncoming(nodeId, false);
     } catch (e) {
       const type = (e as { type?: string } | undefined)?.type;
       busy = false;
@@ -34,7 +38,7 @@
 
 {#if first}
   <div role="dialog" aria-label="Incoming connection request" data-testid="incoming-prompt">
-    <p><strong data-testid="unverified-badge">Unverified</strong> — someone is asking to connect</p>
+    <p><TrustBadge verified={false} /> — someone is asking to connect</p>
     <code data-testid="peer-node-id" style="word-break: break-all">{first.node_id}</code>
     {#if more > 0}<p>+{more} more</p>{/if}
     {#key first.node_id}
