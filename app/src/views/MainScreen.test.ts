@@ -16,11 +16,28 @@ vi.mock("../net", async (orig) => ({
   netPendingIncoming: vi.fn(),
 }));
 const unlistenContacts = vi.fn();
+const namingQueue = vi.hoisted(() => {
+  let value: unknown[] = [];
+  const subs = new Set<(v: unknown[]) => void>();
+  return {
+    subscribe(fn: (v: unknown[]) => void) {
+      subs.add(fn);
+      fn(value);
+      return () => subs.delete(fn);
+    },
+    set(v: unknown[]) {
+      value = v;
+      subs.forEach((f) => f(v));
+    },
+  };
+});
 vi.mock("../lib/contactsStore", async () => {
   const { writable } = await import("svelte/store");
   return {
     contacts: writable([]),
     contactsError: writable(null),
+    namingQueue,
+    dropNaming: vi.fn(),
     refreshContacts: vi.fn(async () => {}),
     startContacts: vi.fn(async () => unlistenContacts),
   };
@@ -39,6 +56,7 @@ beforeEach(() => {
   unlisten.mockClear();
   unlistenContacts.mockClear();
   activeTab.set("contacts");
+  namingQueue.set([]);
   incomingRequests.set([]);
   connections.set({});
   vi.mocked(identityMyInfo).mockResolvedValue({
@@ -85,6 +103,16 @@ describe("MainScreen", () => {
     await fireEvent.click(screen.getByRole("tab", { name: "Network" }));
     expect(screen.getByRole("button", { name: /Accept/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
+  });
+
+  it("naming prompt is shown on every tab", async () => {
+    namingQueue.set([{ node_id: "peer-9", self_name: "Eve", nickname: "Eve" }]);
+    render(MainScreen);
+    expect(await screen.findByTestId("naming-prompt")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("tab", { name: "Network" }));
+    expect(screen.getByTestId("naming-prompt")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("tab", { name: "My Info" }));
+    expect(screen.getByTestId("naming-prompt")).toBeTruthy();
   });
 
   it("runs the net event unlisteners on unmount", async () => {
