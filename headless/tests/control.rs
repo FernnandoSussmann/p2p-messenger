@@ -318,6 +318,7 @@ fn stdout_event_names_are_the_dd02_names() {
             node_id: id,
             direction: Direction::Inbound,
             state: ConnectionState::Connected,
+            display_name: None,
         },
         NetEvent::MyTicketChanged,
         NetEvent::LanPeersChanged(Vec::new()),

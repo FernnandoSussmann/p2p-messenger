@@ -28,6 +28,24 @@ pub trait KnownPeers: Send + Sync + 'static {
     /// self-asserted name: advisory only, never a key, never used for lookup
     /// or dedup.
     fn add(&self, id: NodeId, display_name: Option<DisplayName>) -> Result<(), KnownPeersError>;
+
+    /// Advisory name of an already-known peer. Hello (authorized connection):
+    /// `name` replaces the stored name (None clears) and marks it seen.
+    /// Lan: called only with Some(name); never marks "seen". Must never create
+    /// an entry or change trust; a no-op for unknown ids.
+    fn observe(
+        &self,
+        id: &NodeId,
+        name: Option<&DisplayName>,
+        source: NameSource,
+    ) -> Result<(), KnownPeersError>;
+}
+
+/// Where an advisory name was seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameSource {
+    Hello,
+    Lan,
 }
 
 /// Why a [`KnownPeers`] operation failed.
@@ -219,6 +237,32 @@ impl KnownPeers for FileKnownPeers {
         }
         self.write_document(&doc)
     }
+
+    fn observe(
+        &self,
+        id: &NodeId,
+        name: Option<&DisplayName>,
+        source: NameSource,
+    ) -> Result<(), KnownPeersError> {
+        let name = match (source, name) {
+            (NameSource::Lan, None) => return Ok(()),
+            (_, name) => name.map(|n| n.as_str().to_owned()),
+        };
+        let _guard = self.lock.lock().map_err(|_| KnownPeersError::Corrupt)?;
+        let mut doc = self.read_document()?;
+        let Some(existing) = doc
+            .accounts
+            .get_mut(&self.account)
+            .and_then(|peers| peers.get_mut(&id.to_string()))
+        else {
+            return Ok(());
+        };
+        if existing.name == name {
+            return Ok(());
+        }
+        existing.name = name;
+        self.write_document(&doc)
+    }
 }
 
 #[cfg(test)]
@@ -306,6 +350,30 @@ mod tests {
         let peers = only_account_peers(&dir);
         assert_eq!(peers.len(), 1);
         assert_eq!(peers.values().next().unwrap()["name"], "Ada L");
+    }
+
+    #[test]
+    fn observe_updates_known_names_only_and_never_creates() {
+        let (dir, store, _) = store();
+        store
+            .observe(&node(1), name("Ghost").as_ref(), NameSource::Hello)
+            .unwrap();
+        assert!(!file(&dir).exists());
+
+        store.add(node(1), name("Ada")).unwrap();
+        store
+            .observe(&node(1), name("Ada L").as_ref(), NameSource::Lan)
+            .unwrap();
+        store.observe(&node(1), None, NameSource::Lan).unwrap();
+        let peers = only_account_peers(&dir);
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers.values().next().unwrap()["name"], "Ada L");
+
+        store.observe(&node(1), None, NameSource::Hello).unwrap();
+        let peers = only_account_peers(&dir);
+        assert!(peers.values().next().unwrap()["name"].is_null());
+        assert!(store.is_known(&node(1)).unwrap());
+        assert!(!store.is_known(&node(2)).unwrap());
     }
 
     #[test]

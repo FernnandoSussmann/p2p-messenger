@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use core::discovery::testing::{
-    next_event, restart, spawn_test_node_with, spawn_test_node_wrapped, MemoryKnownPeers,
-    MemoryLanBus, RecordingAddressLookup, SettingsWrapper, TestNode, TestOptions,
+    next_event, restart, spawn_test_node_with, spawn_test_node_wrapped, MemoryLanBus,
+    RecordingAddressLookup, SettingsWrapper, TestNode, TestOptions,
 };
 use core::discovery::{
     event_json, ConnectionState, Direction, FileKnownPeers, LanEvent, LanMode, LanPeer, LanPeerDto,
@@ -107,7 +107,7 @@ fn is_incoming(ev: &NetEvent) -> bool {
 
 fn connected_to(peer: NodeId, direction: Direction) -> impl Fn(&NetEvent) -> bool {
     move |ev| {
-        matches!(ev, NetEvent::ConnectionState { node_id, direction: d, state: ConnectionState::Connected }
+        matches!(ev, NetEvent::ConnectionState { node_id, direction: d, state: ConnectionState::Connected, .. }
             if *node_id == peer && *d == direction)
     }
 }
@@ -645,9 +645,10 @@ fn lan_events_are_debounced() {
 #[ignore = "needs a multicast-capable interface; run: cargo test -p core --test discovery_lan -- --ignored"]
 fn real_mdns_two_nodes_discover_each_other() {
     run(async {
-        let options = || TestOptions {
-            config: NodeConfig::loopback().with_lan(LanMode::Mdns),
-            known: Arc::new(MemoryKnownPeers::new()),
+        let options = || {
+            let mut options = TestOptions::default();
+            options.config = NodeConfig::loopback().with_lan(LanMode::Mdns);
+            options
         };
         let a = spawn_test_node_with("Alice", options()).await;
         let b = spawn_test_node_with("Bob", options()).await;
