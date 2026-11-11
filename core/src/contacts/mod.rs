@@ -16,6 +16,7 @@
 //! - **Removal order.** History is erased first, then the contact is removed;
 //!   a failed erase keeps the contact (see [`ContactBook::remove`]).
 
+mod accept;
 mod book;
 #[cfg(test)]
 mod contract;
@@ -27,6 +28,7 @@ mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
+pub use accept::{accept_incoming, AcceptError, IncomingPrompts};
 pub use book::ContactBook;
 pub use dto::{ContactDto, RemoveContactDto};
 pub use history::{HistoryEraseError, HistoryEraser, NoMessageStore};

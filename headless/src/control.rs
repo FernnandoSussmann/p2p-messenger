@@ -52,6 +52,8 @@ pub enum Request {
     Respond {
         node_id: String,
         accept: bool,
+        #[serde(default)]
+        nickname: Option<String>,
     },
     Connected,
     Wait {
@@ -104,9 +106,14 @@ impl From<&CtlCommand> for Request {
             CtlCommand::Connect(ticket) => Request::Connect {
                 ticket: ticket.clone(),
             },
-            CtlCommand::Respond { node_id, accept } => Request::Respond {
+            CtlCommand::Respond {
+                node_id,
+                accept,
+                nickname,
+            } => Request::Respond {
                 node_id: node_id.clone(),
                 accept: *accept,
+                nickname: nickname.clone(),
             },
             CtlCommand::Connected => Request::Connected,
             CtlCommand::Wait(w) => Request::Wait {
@@ -309,6 +316,7 @@ mod tests {
             CtlCommand::Respond {
                 node_id: "n".into(),
                 accept: true,
+                nickname: Some("Bobby".into()),
             },
             CtlCommand::Wait(WaitArgs {
                 event: WaitEvent::ConnectionState,

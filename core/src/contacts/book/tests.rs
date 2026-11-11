@@ -67,7 +67,7 @@ fn add_rejects_own_node_id() {
 #[test]
 fn add_invalid_nickname_persists_nothing() {
     let f = fixture();
-    for bad in ["", "  ", "a\nb", "a\u{202E}b"] {
+    for bad in ["", "  ", "a\nb", "a\u{202E}b", "a\u{200B}b"] {
         assert!(matches!(
             f.book.add(node(1), bad, None),
             Err(ContactError::InvalidNickname(_))

@@ -1,6 +1,7 @@
 //! Tauri shell: builds the identity service on the OS boundaries, runs the
 //! network node and exposes the identity and network commands to the webview.
 
+mod contacts_cmd;
 mod identity_cmd;
 mod net_cmd;
 mod profile;
@@ -10,12 +11,14 @@ mod test_util;
 use std::sync::Arc;
 use std::time::Duration;
 
+use messenger_core::contacts::{migrate_legacy_known_peers, FileContactStore, NoMessageStore};
 use messenger_core::discovery::LiveTicketProvider;
 use messenger_core::identity::{FileSettingsStore, IdentityService, IdentityStatus, OsKeychain};
 use tauri::{Manager, RunEvent};
 
 const APP_TITLE: &str = "p2p-messenger";
 
+use contacts_cmd::ContactsState;
 use identity_cmd::{
     identity_my_info, identity_provision, identity_set_display_name, identity_status, AppIdentity,
 };
@@ -46,6 +49,21 @@ pub fn run() {
                 std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700))
                     .map_err(|e| format!("cannot restrict app data directory permissions: {e}"))?;
             }
+            let contacts_store = Arc::new(FileContactStore::new(data_dir.clone()));
+            // The app crate has no tracing dependency; counts only, never names.
+            match migrate_legacy_known_peers(&data_dir, contacts_store.as_ref()) {
+                Ok(r) if r.migrated > 0 => {
+                    eprintln!("migrated {} known peers to contacts", r.migrated);
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    eprintln!("legacy known peers not migrated; those peers will be prompted again")
+                }
+            }
+            app.manage(Arc::new(ContactsState::new(
+                contacts_store,
+                Arc::new(NoMessageStore),
+            )));
             let settings = Arc::new(FileSettingsStore::new(data_dir.clone()));
             let tickets = LiveTicketProvider::new();
             let service: AppIdentity = IdentityService::new(
@@ -60,11 +78,7 @@ pub fn run() {
                 window.set_title(&profile::window_title(APP_TITLE, layout.profile.as_ref()))?;
             }
             app.manage(NetState::new(relay));
-            app.manage(NetBoot {
-                data_dir,
-                settings,
-                tickets,
-            });
+            app.manage(NetBoot { settings, tickets });
             if present {
                 ensure_started(app.handle());
             }

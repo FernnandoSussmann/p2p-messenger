@@ -1,7 +1,7 @@
 //! Test doubles for the discovery slice. Everything here drives the same
 //! [`Node`] code paths as production; there is no alternate gate.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -38,11 +38,12 @@ const LAN_BUS_BUFFER: usize = 2048;
 /// One recorded observation: the name (None = cleared) and where it was seen.
 pub type ObservedName = (Option<String>, NameSource);
 
-/// In-memory [`KnownPeers`]. Names are stored as advisory values only.
+/// In-memory [`KnownPeers`]. Names are advisory observations only.
 #[derive(Default)]
 pub struct MemoryKnownPeers {
-    peers: Mutex<HashMap<NodeId, Option<DisplayName>>>,
+    peers: Mutex<HashSet<NodeId>>,
     observed: Mutex<HashMap<NodeId, Vec<ObservedName>>>,
+    dialed: Mutex<Vec<NodeId>>,
 }
 
 impl MemoryKnownPeers {
@@ -58,16 +59,9 @@ impl MemoryKnownPeers {
         self.lock().is_empty()
     }
 
-    /// The last-seen name stored for `id`, if the peer is known and named.
-    pub fn name_of(&self, id: &NodeId) -> Option<String> {
-        self.lock()
-            .get(id)
-            .and_then(|n| n.as_ref().map(|n| n.as_str().to_owned()))
-    }
-
-    /// Pre-seeds `id` as a trusted peer without a name.
+    /// Pre-seeds `id` as a trusted peer.
     pub fn trust(&self, id: NodeId) {
-        self.lock().insert(id, None);
+        self.lock().insert(id);
     }
 
     /// Every advisory name observed for the known peer `id`, in order.
@@ -80,19 +74,22 @@ impl MemoryKnownPeers {
             .unwrap_or_default()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<NodeId, Option<DisplayName>>> {
+    /// Peers passed to `remember_dialed`, in order.
+    pub fn dialed(&self) -> Vec<NodeId> {
+        self.dialed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashSet<NodeId>> {
         self.peers.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 impl KnownPeers for MemoryKnownPeers {
     fn is_known(&self, id: &NodeId) -> Result<bool, KnownPeersError> {
-        Ok(self.lock().contains_key(id))
-    }
-
-    fn add(&self, id: NodeId, display_name: Option<DisplayName>) -> Result<(), KnownPeersError> {
-        self.lock().insert(id, display_name);
-        Ok(())
+        Ok(self.lock().contains(id))
     }
 
     fn observe(
@@ -101,17 +98,28 @@ impl KnownPeers for MemoryKnownPeers {
         name: Option<&DisplayName>,
         source: NameSource,
     ) -> Result<(), KnownPeersError> {
-        let mut peers = self.lock();
-        let Some(stored) = peers.get_mut(id) else {
+        if !self.lock().contains(id) {
             return Ok(());
-        };
-        *stored = name.cloned();
+        }
         self.observed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .entry(*id)
             .or_default()
             .push((name.map(|n| n.as_str().to_owned()), source));
+        Ok(())
+    }
+
+    fn remember_dialed(
+        &self,
+        id: &NodeId,
+        _name: Option<&DisplayName>,
+    ) -> Result<(), KnownPeersError> {
+        self.dialed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(*id);
+        self.lock().insert(*id);
         Ok(())
     }
 }
@@ -121,11 +129,7 @@ pub struct FailingKnownPeers;
 
 impl KnownPeers for FailingKnownPeers {
     fn is_known(&self, _id: &NodeId) -> Result<bool, KnownPeersError> {
-        Err(KnownPeersError::Corrupt)
-    }
-
-    fn add(&self, _id: NodeId, _name: Option<DisplayName>) -> Result<(), KnownPeersError> {
-        Err(KnownPeersError::Corrupt)
+        Err(KnownPeersError)
     }
 
     fn observe(
@@ -134,7 +138,15 @@ impl KnownPeers for FailingKnownPeers {
         _name: Option<&DisplayName>,
         _source: NameSource,
     ) -> Result<(), KnownPeersError> {
-        Err(KnownPeersError::Corrupt)
+        Err(KnownPeersError)
+    }
+
+    fn remember_dialed(
+        &self,
+        _id: &NodeId,
+        _name: Option<&DisplayName>,
+    ) -> Result<(), KnownPeersError> {
+        Err(KnownPeersError)
     }
 }
 

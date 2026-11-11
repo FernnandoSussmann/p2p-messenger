@@ -337,7 +337,7 @@ async fn known_call<T: Send + 'static>(
     let known = inner.known.clone();
     tokio::task::spawn_blocking(move || f(known.as_ref()))
         .await
-        .unwrap_or(Err(KnownPeersError::Corrupt))
+        .unwrap_or(Err(KnownPeersError))
 }
 
 /// The running node. Dropping it closes the endpoint.
@@ -467,7 +467,8 @@ impl Node {
         Ok(peer)
     }
 
-    /// Answers the open prompt of `peer`.
+    /// Answers the prompt for this session only; `contacts::accept_incoming`
+    /// persists trust.
     pub fn respond_incoming(&self, peer: &NodeId, accept: bool) -> Result<(), RespondError> {
         let pending = self
             .inner
@@ -790,10 +791,6 @@ async fn handle_incoming(inner: Arc<Inner>, incoming: Incoming, slot: HandshakeS
 
     match outcome {
         Outcome::Accepted => {
-            let stored = name.clone();
-            if let Err(e) = known_call(&inner, move |k| k.add(peer, stored)).await {
-                tracing::debug!(peer = %peer.fmt_short(), error = %e, "could not remember peer");
-            }
             reply_and_authorize(&inner, conn, send, peer, name).await;
         }
         Outcome::Declined => {
@@ -975,8 +972,11 @@ async fn run_dial(inner: &Arc<Inner>, addr: EndpointAddr) -> Result<(), FailureR
     // The user deliberately dialed this NodeId: remember it, but only now
     // that it answered with a valid Hello.
     let stored = name.clone();
-    if let Err(e) = known_call(inner, move |k| k.add(peer, stored)).await {
-        tracing::debug!(peer = %peer.fmt_short(), error = %e, "could not remember peer");
+    if known_call(inner, move |k| k.remember_dialed(&peer, stored.as_ref()))
+        .await
+        .is_err()
+    {
+        tracing::debug!(peer = %peer.fmt_short(), "could not remember dialed peer");
     }
     authorize(inner, conn, peer, Direction::Outbound, name);
     Ok(())

@@ -74,6 +74,18 @@ fn nameless_entry_gets_peer_short_id_nickname() {
 }
 
 #[test]
+fn invisible_legacy_name_counts_as_no_name() {
+    let l = Legacy::new(&[(1, Some("Bob\u{200D}"), 5)]);
+    let store = MemoryContactStore::new();
+    let report = migrate_legacy_known_peers(l.dir.path(), &store).unwrap();
+    assert_eq!(report.migrated, 1);
+    let c = store.get(&l.account, &node(1)).unwrap().unwrap();
+    assert_eq!(c.nickname.as_str(), format!("Peer {}", node(1).fmt_short()));
+    assert_eq!(c.self_name, None);
+    assert!(!l.path().exists());
+}
+
+#[test]
 fn migrates_every_account_separately() {
     let (a, b) = (AccountId::new(), AccountId::new());
     let l = Legacy::multi(&[(a, &[(1, Some("Bob"), 1)]), (b, &[(2, None, 2)])]);

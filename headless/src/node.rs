@@ -11,9 +11,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iroh::RelayUrl;
+use messenger_core::contacts::{
+    accept_incoming, migrate_legacy_known_peers, AcceptError, ContactBook, ContactError,
+    FileContactStore, Nickname, NoMessageStore,
+};
 use messenger_core::discovery::{
-    event_json, ConnectError, FileKnownPeers, LanMode, LanPeerDto, LiveTicketProvider, Node,
-    NodeConfig, NodeDeps, RelayChoice,
+    event_json, ConnectError, LanMode, LanPeerDto, LiveTicketProvider, Node, NodeConfig, NodeDeps,
+    RelayChoice,
 };
 use messenger_core::identity::{FileSettingsStore, IdentityService, IdentityStatus, NodeId};
 use serde_json::{json, Value};
@@ -184,12 +188,28 @@ pub async fn run(args: RunArgs) -> Result<(), RunError> {
             .set_display_name(args.name.as_str())
             .map_err(fail("cannot set display name"))?;
     }
-    let IdentityStatus::Present { account_id, .. } = identity.status() else {
+    let IdentityStatus::Present {
+        account_id,
+        node_id,
+    } = identity.status()
+    else {
         return Err(RunError("identity is unavailable".into()));
     };
+    let contacts = Arc::new(FileContactStore::new(args.data_dir.clone()));
+    match migrate_legacy_known_peers(&args.data_dir, contacts.as_ref()) {
+        Ok(r) if r.migrated > 0 => eprintln!("migrated {} known peers to contacts", r.migrated),
+        Ok(_) => {}
+        Err(_) => eprintln!("legacy known peers not migrated; those peers will be prompted again"),
+    }
+    let book = Arc::new(ContactBook::new(
+        account_id,
+        node_id,
+        contacts,
+        Arc::new(NoMessageStore),
+    ));
     let deps = NodeDeps {
         settings,
-        known: Arc::new(FileKnownPeers::new(args.data_dir.clone(), account_id)),
+        known: book.clone(),
         tickets,
     };
     let node = Arc::new(
@@ -222,7 +242,14 @@ pub async fn run(args: RunArgs) -> Result<(), RunError> {
     let handler_log = Arc::clone(&log);
     let server = tokio::spawn(control::serve(
         listener,
-        move |request| handle(Arc::clone(&handler_node), Arc::clone(&handler_log), request),
+        move |request| {
+            handle(
+                Arc::clone(&handler_node),
+                Arc::clone(&book),
+                Arc::clone(&handler_log),
+                request,
+            )
+        },
         Arc::clone(&stop),
     ));
 
@@ -255,7 +282,12 @@ async fn wait_for_stop(stop: &Notify) {
     }
 }
 
-async fn handle(node: Arc<Node>, log: Arc<EventLog>, request: Request) -> Reply {
+async fn handle(
+    node: Arc<Node>,
+    book: Arc<ContactBook>,
+    log: Arc<EventLog>,
+    request: Request,
+) -> Reply {
     match request {
         Request::NodeId => Reply::ok(json!({ "node_id": node.node_id().to_string() })),
         Request::Ticket => match node.ticket_when_ready(TICKET_READY_TIMEOUT).await {
@@ -280,13 +312,39 @@ async fn handle(node: Arc<Node>, log: Arc<EventLog>, request: Request) -> Reply 
             Err(ConnectError::SelfDial) => Reply::err("SelfDial"),
             Err(ConnectError::ShuttingDown) => Reply::err("NotReady"),
         },
-        Request::Respond { node_id, accept } => {
+        Request::Respond {
+            node_id,
+            accept,
+            nickname,
+        } => {
             let Ok(peer) = NodeId::from_str(&node_id) else {
                 return Reply::err("NoSuchRequest");
             };
-            match node.respond_incoming(&peer, accept) {
-                Ok(()) => Reply::ok(json!({})),
-                Err(_) => Reply::err("NoSuchRequest"),
+            if !accept {
+                return match node.respond_incoming(&peer, false) {
+                    Ok(()) => Reply::ok(json!({})),
+                    Err(_) => Reply::err("NoSuchRequest"),
+                };
+            }
+            let result = tokio::task::spawn_blocking(move || {
+                let nickname = nickname.unwrap_or_else(|| {
+                    let name = node.pending_request(&peer).and_then(|r| r.display_name);
+                    Nickname::default_for(&peer, name.as_ref())
+                        .as_str()
+                        .to_owned()
+                });
+                accept_incoming(&book, node.as_ref(), &peer, &nickname)
+            })
+            .await;
+            match result {
+                Ok(Ok(_)) => Reply::ok(json!({})),
+                Ok(Err(AcceptError::InvalidNickname(_)))
+                | Ok(Err(AcceptError::Contacts(ContactError::InvalidNickname(_)))) => {
+                    Reply::err("InvalidNickname")
+                }
+                Ok(Err(AcceptError::NoSuchRequest)) => Reply::err("NoSuchRequest"),
+                Ok(Err(AcceptError::Contacts(_))) => Reply::err("ContactsUnavailable"),
+                Err(_) => Reply::err("Internal"),
             }
         }
         Request::Connected => {

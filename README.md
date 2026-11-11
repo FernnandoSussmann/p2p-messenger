@@ -16,7 +16,7 @@ only once they carry real code — no empty stubs or placeholder modules.
 | Crate      | Status  | Responsibility                                               |
 | ---------- | ------- | ------------------------------------------------------------ |
 | `protocol` | present | Shared serde wire types (`Envelope`, `Payload`, …) + version |
-| `core`     | present | UI-agnostic logic by slice: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence; more to come) |
+| `core`     | present | UI-agnostic logic by slices: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence) and `contacts` (contact book, trust, interim store; more to come) |
 | `app`      | present | Thin Tauri v2 + Svelte shell over `core`                     |
 | `headless` | present | Test-only headless node + file keyring for Level-3 simulation; never shipped, never used by `app` |
 
@@ -45,11 +45,27 @@ create a real identity.
 3. Device A shows an Accept/Decline prompt marked **Unverified** (the name is
    self-asserted; trust is the NodeId). Accept, and both sides show Connected.
 
-Trust rule (interim, until DD-03 adds named contacts): a peer you dial is
-remembered once it has replied with its Hello, and may later connect to you
-without a prompt. Accepting an inbound request remembers that peer too.
-Declined or expired requests leave no trace. Known peers are kept per account
-in `known_peers.json` (public NodeIds and advisory names only).
+Trust rule: trust is the peer's NodeId, kept as a contact.
+
+- **Accept** asks for your name for them and adds an **Unverified** contact.
+  The field is prefilled with what the peer calls itself (or "Peer <id>" when
+  it sent no name or an invalid one); edit it before clicking Accept. Nothing
+  is saved until you click Accept.
+- A peer you dial is remembered once it replies with a valid Hello, as an
+  Unverified contact named after what it calls itself, or "Peer <id>". It may
+  later connect to you without a prompt.
+- Later name changes by the peer never change your nickname.
+- Declined or expired requests leave no trace.
+- Contacts are kept per account in `contacts.json` **in plaintext (nicknames
+  included) until DD-05's encrypted DB replaces it**.
+- An existing `known_peers.json` is migrated once at startup and deleted; its
+  peers still connect without a prompt. If the migration fails, they are
+  prompted again.
+
+Names (yours and peers') may no longer contain invisible characters such as
+zero-width spaces. Joiners are allowed only inside emoji sequences (👨‍👩‍👧,
+🏳️‍🌈, subdivision flags such as 🏴󠁧󠁢󠁥󠁮󠁧󠁿). A saved name that now fails is treated as
+unset, and My Info asks for a new one.
 
 NAT traversal (hole punching, relay fallback) is provided by iroh; this app
 adds no traversal logic of its own. Relays only ever carry ciphertext.
@@ -118,11 +134,15 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 5. My Info shows the long live ticket (not just `p2pm:<nodeid>`); it updates
    shortly after launch once the relay connects.
 6. Paste it on a second device (Network tab): the receiver gets an
-   Accept/Decline prompt marked Unverified, on whichever tab is open.
-7. Accept: both devices show Connected. Decline: the dialer shows Declined and
-   the receiver keeps no entry.
+   Accept/Decline prompt marked Unverified, on whichever tab is open. It shows
+   a prefilled, editable "Your name for them" field and what the peer calls
+   itself; an empty field disables Accept.
+7. Accept (with the name you chose): both devices show Connected. Decline: the
+   dialer shows Declined and the receiver keeps no entry.
 8. Relaunch and reconnect from the same device: a known peer connects without
    a prompt.
+   After upgrading a profile that has a `known_peers.json`, a previously
+   accepted peer still connects without a prompt.
 9. Two instances (see Two-device simulation): each appears in the other's
    Peers on this network list as Unverified, with its full NodeId. Connect from
    the list: the other side gets the Accept/Decline prompt.
@@ -193,7 +213,7 @@ $C node-a messenger-headless ctl --data-dir /data node-id
 $C node-a messenger-headless ctl --data-dir /data ticket          # prints {"ok":true,"ticket":"..."}
 $C node-b messenger-headless ctl --data-dir /data connect <TICKET>
 $C node-a messenger-headless ctl --data-dir /data wait incoming_request --timeout-secs 30
-$C node-a messenger-headless ctl --data-dir /data respond <NODE_B_ID> accept
+$C node-a messenger-headless ctl --data-dir /data respond <NODE_B_ID> accept [NICKNAME]
 $C node-a messenger-headless ctl --data-dir /data wait connection_state --state connected
 $C node-a messenger-headless ctl --data-dir /data presence off
 $C node-b messenger-headless ctl --data-dir /data peers

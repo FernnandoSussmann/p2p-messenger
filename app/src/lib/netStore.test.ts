@@ -18,12 +18,17 @@ vi.mock("../net", () => ({ netPendingIncoming: vi.fn(), netLanPeers: vi.fn() }))
 import { startNetEvents, incomingRequests, connections, lanPeers } from "./netStore";
 import { netPendingIncoming, netLanPeers } from "../net";
 
-const req = (id: string, name: string | null = "Eve") => ({ node_id: id, display_name: name });
+const req = (id: string, name: string | null = "Eve") => ({
+  node_id: id,
+  display_name: name,
+  suggested_nickname: name ?? "Peer abc",
+});
 const conn = (id: string, direction: "inbound" | "outbound", state: string, reason: string | null = null) => ({
   node_id: id,
   direction,
   state,
   reason,
+  display_name: null,
 });
 
 beforeEach(() => {
