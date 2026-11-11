@@ -18,7 +18,10 @@ use tauri::{Manager, RunEvent};
 
 const APP_TITLE: &str = "p2p-messenger";
 
-use contacts_cmd::ContactsState;
+use contacts_cmd::{
+    contacts_add, contacts_is_known, contacts_list, contacts_remove, contacts_rename,
+    contacts_set_verified, ContactsState,
+};
 use identity_cmd::{
     identity_my_info, identity_provision, identity_set_display_name, identity_status, AppIdentity,
 };
@@ -95,7 +98,13 @@ pub fn run() {
             net_pending_incoming,
             net_presence_get,
             net_presence_set,
-            net_lan_peers
+            net_lan_peers,
+            contacts_list,
+            contacts_add,
+            contacts_rename,
+            contacts_set_verified,
+            contacts_remove,
+            contacts_is_known
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
