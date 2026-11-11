@@ -1,7 +1,8 @@
 <script lang="ts">
   import PresenceToggle from "./PresenceToggle.svelte";
-  import LanPeers from "./LanPeers.svelte";
+  import NodeIdLine from "./NodeIdLine.svelte";
   import { connections } from "../lib/netStore";
+  import { contactIds, expectNaming, requestNaming } from "../lib/contactsStore";
   import { netConnectTicket, describeNetError } from "../net";
 
   let ticket = $state("");
@@ -17,7 +18,8 @@
     error = null;
     busy = true;
     try {
-      await netConnectTicket(value);
+      const res = await netConnectTicket(value);
+      expectNaming(res.node_id);
       ticket = "";
     } catch (e) {
       error = describeNetError(e);
@@ -30,13 +32,12 @@
 <section>
   <h2>Network</h2>
   <PresenceToggle />
-  <LanPeers />
   <form onsubmit={connect}>
     <label>
       Connect by ticket
       <textarea bind:value={ticket} rows="4"></textarea>
     </label>
-    <p>Once they reply, this device is remembered and can reconnect without asking you again.</p>
+    <p>Once they reply, they're saved as an unverified contact under the name they gave, which you can change, and they can reconnect without asking you again.</p>
     <button type="submit" disabled={busy || ticket.trim() === ""}>Connect and remember this device</button>
     {#if error}<p role="alert">{error}</p>{/if}
   </form>
@@ -48,10 +49,13 @@
     <ul>
       {#each list as c (c.node_id)}
         <li data-testid="connection">
-          <code style="word-break: break-all">{c.node_id}</code>
+          <NodeIdLine nodeId={c.node_id} />
           <span data-testid="conn-direction">{c.direction}</span>
           <span data-testid="conn-state">{c.state}</span>
           {#if c.reason}<span data-testid="conn-reason">{c.reason}</span>{/if}
+          {#if c.state === "connected" && !$contactIds.has(c.node_id)}
+            <button type="button" onclick={() => requestNaming(c.node_id, c.display_name)}>Add contact…</button>
+          {/if}
         </li>
       {/each}
     </ul>
