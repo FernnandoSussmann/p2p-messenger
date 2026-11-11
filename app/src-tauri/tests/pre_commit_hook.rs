@@ -16,6 +16,13 @@ fn pre_commit_hook_exists_is_executable_and_runs_all_gates() {
 
     let script = std::fs::read_to_string(&path).unwrap();
     let secret_gate = ["SecretKey", "Bytes|Db", "Key"].concat();
+    let backend_gate = [
+        "File",
+        "Keychain|messenger",
+        "-headless|messenger",
+        "_headless",
+    ]
+    .concat();
     let required = [
         "set -euo pipefail",
         "cargo fmt --all --check",
@@ -23,6 +30,7 @@ fn pre_commit_hook_exists_is_executable_and_runs_all_gates() {
         "cargo test --workspace",
         "cargo build",
         secret_gate.as_str(),
+        backend_gate.as_str(),
         "writeText|clipboard",
         "npm run check",
         "npm test",

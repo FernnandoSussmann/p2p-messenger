@@ -3,7 +3,7 @@
 # Only crates with real content are listed as members — see BLUEPRINT.MD.
 [workspace]
 resolver = "2"
-members = ["protocol", "core", "app/src-tauri"]
+members = ["protocol", "core", "headless", "app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

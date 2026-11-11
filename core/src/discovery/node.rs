@@ -124,6 +124,16 @@ impl NodeConfig {
         self
     }
 
+    /// Whether the node publishes to and resolves via n0's internet lookup.
+    pub fn with_internet_lookup(mut self, enabled: bool) -> Self {
+        self.internet_lookup = enabled;
+        self
+    }
+
+    pub fn internet_lookup(&self) -> bool {
+        self.internet_lookup
+    }
+
     /// Registers a lookup that records every `EndpointData` the endpoint
     /// publishes.
     #[cfg(any(test, feature = "test-support"))]

@@ -18,6 +18,7 @@ only once they carry real code — no empty stubs or placeholder modules.
 | `protocol` | present | Shared serde wire types (`Envelope`, `Payload`, …) + version |
 | `core`     | present | UI-agnostic logic by slice: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence; more to come) |
 | `app`      | present | Thin Tauri v2 + Svelte shell over `core`                     |
+| `headless` | present | Test-only headless node + file keyring for Level-3 simulation; never shipped, never used by `app` |
 
 ## Run the app
 
@@ -170,6 +171,66 @@ blocked by a VPN or firewall, the LAN list may stay empty; use the ticket path.
 
 The profile override only relocates state. It never disables a prompt, trust
 check or any other control.
+
+### Level 3: containerized headless nodes (Docker)
+
+`headless/` builds `messenger-headless`, a test-only node that runs the same
+`core::discovery` stack with no webview, driven over a private Unix socket
+(`messenger-headless ctl`). `docker/` runs two of them on one Docker network.
+Prerequisites: Docker with Compose v2.
+
+```sh
+docker compose -f docker/compose.yaml build   # build the image
+docker/smoke.sh                               # one command: up, LAN, ticket, reconnect, presence, isolation, teardown
+```
+
+Drive the nodes by hand:
+
+```sh
+docker compose -f docker/compose.yaml up -d
+C="docker compose -f docker/compose.yaml exec -T"
+$C node-a messenger-headless ctl --data-dir /data node-id
+$C node-a messenger-headless ctl --data-dir /data ticket          # prints {"ok":true,"ticket":"..."}
+$C node-b messenger-headless ctl --data-dir /data connect <TICKET>
+$C node-a messenger-headless ctl --data-dir /data wait incoming_request --timeout-secs 30
+$C node-a messenger-headless ctl --data-dir /data respond <NODE_B_ID> accept
+$C node-a messenger-headless ctl --data-dir /data wait connection_state --state connected
+$C node-a messenger-headless ctl --data-dir /data presence off
+$C node-b messenger-headless ctl --data-dir /data peers
+docker compose -f docker/compose.yaml down -v
+```
+
+`wait` consumes the event it returns: each event is delivered to at most one
+`wait` call (a ring of the last 256 events is kept), and a timeout exits
+non-zero. Teardown: `down -v` removes the per-node volumes; without `-v`,
+identities persist until the next `down -v`. For more nodes, copy a service in
+`docker/compose.yaml` together with its own volume; do not use `--scale`, since
+replicas would share one volume.
+
+Scope:
+
+- The containers exercise mDNS discovery and the ticket path over direct
+  addresses. They run `--relay disabled`, so the
+  **relay** path is not tested by Docker; it is covered by the Level-1
+  `core/tests/discovery_relay.rs`.
+- The Docker bridge is not `internal: true`: mDNS needs the default route, so
+  egress is open. Headless nodes always run with n0 internet lookup disabled
+  (no n0 DNS/pkarr publishing or resolution); `--relay` is honored as given.
+  The desktop app keeps internet lookup on.
+- Parity: the same trust-gate and presence scenarios run against in-process
+  nodes (`core/tests/discovery_parity.rs`) and against real headless processes
+  (`headless/tests/parity.rs`). Host processes use `--lan off` (loopback
+  multicast is unreliable), so the presence scenario proves presence
+  **persistence and dialability** at both levels. Presence **visibility** is
+  checked by `docker/smoke.sh` stage 5 (and at Level 1 by `discovery_lan.rs`).
+- Measured on one run, with presence OFF on node A, node B's peer list dropped A
+  after about 3 s (smoke.sh polls for up to 180 s; the goodbye is processed quickly, a silent peer would take its mDNS TTL).
+
+Warnings: this is **test-only** with **throwaway identities**; never point a
+real identity at a container. The file keyring stores secrets **unencrypted** in
+the node's volume. The headless node never uses the OS keychain (`--keyring os`
+is rejected). The control surface has no stability or security guarantees and is
+not a product feature; it is not exposed in the GUI.
 
 ## License
 

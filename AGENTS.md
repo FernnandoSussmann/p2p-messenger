@@ -19,6 +19,8 @@ Cargo workspace built from vertical feature slices.
 | `protocol/`      | Shared serde wire types (`Envelope`, `Payload`, …), `PROTOCOL_VERSION`, `ALPN`. Transport/UI-agnostic. |
 | `core/`          | UI-agnostic logic, one module per feature slice (currently `identity/` and `discovery/`). Knows nothing about Tauri. |
 | `app/src-tauri/` | Thin Tauri shell: command handlers (`identity_cmd.rs`, `net_cmd.rs`) over `core`. |
+| `headless/`      | **Test-only** headless node (`messenger-headless`) with a file-backed keyring (`FileKeychain`, unencrypted, throwaway identities) and a Unix-socket control surface; simulates devices at Level 3. Unix only. Never shipped; `app/` must never depend on or name it (pre-commit grep gate). |
+| `docker/`        | **Test-only** `headless.Dockerfile`, `compose.yaml` and `smoke.sh` (two isolated nodes; `docker/smoke.sh` is not part of the hook). No stability or security guarantees. |
 | `app/src/`       | Svelte frontend (`views/`, `lib/`), Vitest tests alongside (`*.test.ts`).     |
 | `.githooks/`     | Tracked pre-commit hook: the mandatory local test gate (there is no CI).      |
 
@@ -35,6 +37,7 @@ cargo test --workspace           # all Rust tests
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cd app && npm ci && npm test && npm run check && npm run build   # frontend
+docker/smoke.sh                  # Level-3 two-container smoke (needs Docker; not in the hook)
 ```
 
 Do not use plain `cargo run` for the app: it shows "connection refused" because
@@ -59,7 +62,7 @@ fix the failure instead.
 
 ## Security rules (enforced; do not weaken)
 
-- Private keys and the SQLCipher key live in the OS keychain (`keyring`). Secret types (`SecretKeyBytes`, `DbKey`) are zeroized and must **never** cross into `app/` — the pre-commit hook greps for these names under `app/`, so do not reference them there, even in types or comments.
+- Private keys and the SQLCipher key live in the OS keychain (`keyring`). Test-only backends (`FileKeychain`, the headless crate) never reach `app/` either (same grep gate). Secret types (`SecretKeyBytes`, `DbKey`) are zeroized and must **never** cross into `app/` — the pre-commit hook greps for these names under `app/`, so do not reference them there, even in types or comments.
 - Clipboard access (`writeText` / `clipboard`) is permitted **only** in `app/src/views/MyInfo.svelte` (and tests).
 - Logs must never contain message plaintext, private keys, or secrets. NodeIds and addresses are fine.
 - Everything on the wire is encrypted; relays only ever see ciphertext.
