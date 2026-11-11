@@ -11,5 +11,6 @@
 
 #![forbid(unsafe_code)]
 
+pub mod contacts;
 pub mod discovery;
 pub mod identity;
