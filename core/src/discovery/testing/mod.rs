@@ -1,0 +1,479 @@
+//! Test doubles for the discovery slice. Everything here drives the same
+//! [`Node`] code paths as production; there is no alternate gate.
+
+use std::collections::HashMap;
+use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use iroh::address_lookup::{
+    AddressLookup, AddressLookupBuilder, AddressLookupBuilderError, EndpointData, EndpointInfo,
+    MemoryLookup,
+};
+use iroh::endpoint::{presets, Connection};
+use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey, Watcher};
+use protocol::ALPN;
+use tempfile::TempDir;
+use tokio::sync::{broadcast, mpsc};
+
+use crate::discovery::events::NetEvent;
+use crate::discovery::flood::GateLimits;
+use crate::discovery::hello::encode_hello;
+use crate::discovery::known_peers::{KnownPeers, KnownPeersError};
+use crate::discovery::lan::{
+    encode_lan_name, LanDiscovery, LanError, LanEvent, LanMode, LAN_NAME_MAX_BYTES,
+};
+use crate::discovery::node::{Node, NodeConfig, NodeDeps};
+use crate::discovery::ticket_provider::LiveTicketProvider;
+use crate::identity::testing::FakeKeychain;
+use crate::identity::{DisplayName, IdentityService, MemorySettingsStore, NodeId, SettingsStore};
+
+pub mod scenarios;
+
+const LAN_BUS_BUFFER: usize = 2048;
+
+/// In-memory [`KnownPeers`]. Names are stored as advisory values only.
+#[derive(Default)]
+pub struct MemoryKnownPeers {
+    peers: Mutex<HashMap<NodeId, Option<DisplayName>>>,
+}
+
+impl MemoryKnownPeers {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.lock().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lock().is_empty()
+    }
+
+    /// The last-seen name stored for `id`, if the peer is known and named.
+    pub fn name_of(&self, id: &NodeId) -> Option<String> {
+        self.lock()
+            .get(id)
+            .and_then(|n| n.as_ref().map(|n| n.as_str().to_owned()))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<NodeId, Option<DisplayName>>> {
+        self.peers.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl KnownPeers for MemoryKnownPeers {
+    fn is_known(&self, id: &NodeId) -> Result<bool, KnownPeersError> {
+        Ok(self.lock().contains_key(id))
+    }
+
+    fn add(&self, id: NodeId, display_name: Option<DisplayName>) -> Result<(), KnownPeersError> {
+        self.lock().insert(id, display_name);
+        Ok(())
+    }
+}
+
+/// A store whose every operation fails, to prove the gate fails closed.
+pub struct FailingKnownPeers;
+
+impl KnownPeers for FailingKnownPeers {
+    fn is_known(&self, _id: &NodeId) -> Result<bool, KnownPeersError> {
+        Err(KnownPeersError::Corrupt)
+    }
+
+    fn add(&self, _id: NodeId, _name: Option<DisplayName>) -> Result<(), KnownPeersError> {
+        Err(KnownPeersError::Corrupt)
+    }
+}
+
+/// An in-process stand-in for iroh's internet address lookup. Nodes started
+/// with the same instance publish their addresses to it and resolve each
+/// other by NodeId.
+#[derive(Clone, Debug, Default)]
+pub struct MemoryAddressLookup {
+    shared: MemoryLookup,
+}
+
+impl MemoryAddressLookup {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The addresses `id` has published so far.
+    pub fn published(&self, id: &NodeId) -> Option<EndpointAddr> {
+        self.shared
+            .get_endpoint_info(*id)
+            .map(EndpointInfo::into_endpoint_addr)
+    }
+}
+
+impl AddressLookupBuilder for MemoryAddressLookup {
+    fn into_address_lookup(
+        self,
+        endpoint: &Endpoint,
+    ) -> Result<impl iroh::address_lookup::AddressLookup, AddressLookupBuilderError> {
+        let mut watcher = endpoint.watch_addr();
+        let closed = endpoint.closed();
+        let shared = self.shared.clone();
+        tokio::spawn(async move {
+            tokio::pin!(closed);
+            loop {
+                shared.set_endpoint_info(EndpointInfo::from(watcher.get()));
+                tokio::select! {
+                    updated = watcher.updated() => {
+                        if updated.is_err() {
+                            break;
+                        }
+                    }
+                    _ = &mut closed => break,
+                }
+            }
+        });
+        Ok(self.shared)
+    }
+}
+
+/// Records every `EndpointData` the endpoint hands to its address lookups,
+/// to prove what would reach internet publishers.
+#[derive(Clone, Debug, Default)]
+pub struct RecordingAddressLookup {
+    published: Arc<Mutex<Vec<EndpointData>>>,
+}
+
+impl RecordingAddressLookup {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn published(&self) -> Vec<EndpointData> {
+        self.published
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl AddressLookup for RecordingAddressLookup {
+    fn publish(&self, data: &EndpointData) {
+        self.published
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(data.clone());
+    }
+}
+
+struct Member {
+    tx: mpsc::Sender<LanEvent>,
+}
+
+#[derive(Default)]
+struct BusState {
+    members: HashMap<NodeId, Member>,
+    /// The record each advertising node currently publishes.
+    advertised: HashMap<NodeId, (EndpointAddr, Option<Vec<u8>>)>,
+    advertise_calls: HashMap<NodeId, usize>,
+}
+
+/// A deterministic in-process stand-in for the multicast socket. Advertising
+/// nodes are visible to every other node on the same bus.
+#[derive(Clone, Default)]
+pub struct MemoryLanBus {
+    state: Arc<Mutex<BusState>>,
+}
+
+impl MemoryLanBus {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BusState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(in crate::discovery) fn join(&self, endpoint: Endpoint) -> MemoryLan {
+        let id = endpoint.id();
+        let (tx, rx) = mpsc::channel(LAN_BUS_BUFFER);
+        let mut state = self.lock();
+        for (other, (addr, user_data)) in &state.advertised {
+            if *other != id {
+                let _ = tx.try_send(LanEvent::Discovered {
+                    addr: addr.clone(),
+                    user_data: user_data.clone(),
+                });
+            }
+        }
+        state.members.insert(id, Member { tx });
+        MemoryLan {
+            bus: self.clone(),
+            endpoint,
+            events: Mutex::new(Some(rx)),
+        }
+    }
+
+    /// What `id` currently publishes: `None` when not advertising, otherwise
+    /// the raw name bytes attached to its record (`None` inside = no name).
+    pub fn advertised_record(&self, id: &NodeId) -> Option<Option<Vec<u8>>> {
+        self.lock().advertised.get(id).map(|(_, data)| data.clone())
+    }
+
+    /// How many times `id` turned its record on or refreshed it on this bus.
+    pub fn advertise_count(&self, id: &NodeId) -> usize {
+        self.lock().advertise_calls.get(id).copied().unwrap_or(0)
+    }
+
+    /// Feeds an arbitrary observation to `target`, through the same registry
+    /// and node code as a real one.
+    pub async fn inject(&self, target: &NodeId, ev: LanEvent) {
+        let tx = self.lock().members.get(target).map(|m| m.tx.clone());
+        if let Some(tx) = tx {
+            let _ = tx.send(ev).await;
+        }
+    }
+}
+
+/// One node's handle on a [`MemoryLanBus`].
+pub struct MemoryLan {
+    bus: MemoryLanBus,
+    endpoint: Endpoint,
+    events: Mutex<Option<mpsc::Receiver<LanEvent>>>,
+}
+
+impl LanDiscovery for MemoryLan {
+    fn set_advertise(&self, on: bool, local_name: Option<&DisplayName>) -> Result<(), LanError> {
+        let id = self.endpoint.id();
+        let mut state = self.bus.lock();
+        let event = if on {
+            let addr = self.endpoint.addr();
+            let user_data = local_name.map(|n| encode_lan_name(n, LAN_NAME_MAX_BYTES));
+            *state.advertise_calls.entry(id).or_default() += 1;
+            state
+                .advertised
+                .insert(id, (addr.clone(), user_data.clone()));
+            LanEvent::Discovered { addr, user_data }
+        } else if state.advertised.remove(&id).is_some() {
+            LanEvent::Expired(id)
+        } else {
+            return Ok(());
+        };
+        for (other, member) in &state.members {
+            if *other != id {
+                let _ = member.tx.try_send(event.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn events(&self) -> mpsc::Receiver<LanEvent> {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .unwrap_or_else(|| mpsc::channel(1).1)
+    }
+}
+
+/// Wraps the node's settings store, to inject faults or a different backing
+/// store for presence.
+pub type SettingsWrapper =
+    Arc<dyn Fn(Arc<MemorySettingsStore>) -> Arc<dyn SettingsStore + Send + Sync> + Send + Sync>;
+
+/// How a test node is configured beyond the defaults.
+#[derive(Clone)]
+pub struct TestOptions {
+    pub config: NodeConfig,
+    pub known: Arc<dyn KnownPeers>,
+}
+
+impl Default for TestOptions {
+    fn default() -> Self {
+        Self {
+            config: NodeConfig::loopback(),
+            known: Arc::new(MemoryKnownPeers::new()),
+        }
+    }
+}
+
+impl TestOptions {
+    pub fn with_limits(mut self, limits: GateLimits) -> Self {
+        self.config.limits = limits;
+        self
+    }
+
+    pub fn with_lookup(mut self, lookup: &MemoryAddressLookup) -> Self {
+        self.config = self.config.with_lookup(lookup.clone());
+        self
+    }
+
+    pub fn with_known(mut self, known: Arc<dyn KnownPeers>) -> Self {
+        self.known = known;
+        self
+    }
+
+    pub fn with_lan(mut self, bus: &MemoryLanBus) -> Self {
+        self.config = self.config.with_lan(LanMode::Memory(bus.clone()));
+        self
+    }
+
+    pub fn with_recorder(mut self, recorder: &RecordingAddressLookup) -> Self {
+        self.config = self.config.with_recorder(recorder.clone());
+        self
+    }
+}
+
+pub type TestIdentity =
+    IdentityService<Arc<FakeKeychain>, Arc<MemorySettingsStore>, LiveTicketProvider>;
+
+/// A provisioned identity plus a running node, in an isolated directory.
+pub struct TestNode {
+    pub node: Node,
+    pub identity: TestIdentity,
+    pub known: Arc<dyn KnownPeers>,
+    pub dir: TempDir,
+    pub keychain: Arc<FakeKeychain>,
+    settings: Arc<MemorySettingsStore>,
+    tickets: LiveTicketProvider,
+    options: TestOptions,
+    wrapper: Option<SettingsWrapper>,
+}
+
+impl TestNode {
+    pub fn id(&self) -> NodeId {
+        self.node.node_id()
+    }
+}
+
+pub async fn spawn_test_node(name: &str) -> TestNode {
+    spawn_test_node_with(name, TestOptions::default()).await
+}
+
+pub async fn spawn_test_node_with(name: &str, options: TestOptions) -> TestNode {
+    spawn_test_node_wrapped(name, options, None).await
+}
+
+/// Like [`spawn_test_node_with`], with the node reading its settings through
+/// `wrapper` (to inject faults or back presence with a file).
+pub async fn spawn_test_node_wrapped(
+    name: &str,
+    options: TestOptions,
+    wrapper: Option<SettingsWrapper>,
+) -> TestNode {
+    let dir = TempDir::new().expect("temp dir");
+    let keychain = Arc::new(FakeKeychain::new());
+    let settings = Arc::new(MemorySettingsStore::new());
+    let tickets = LiveTicketProvider::new();
+    let identity = IdentityService::new(
+        keychain.clone(),
+        settings.clone(),
+        tickets.clone(),
+        dir.path(),
+    );
+    identity.provision().expect("provision");
+    identity.set_display_name(name).expect("display name");
+    start(identity, dir, keychain, settings, tickets, options, wrapper).await
+}
+
+/// Stops the node and starts a new one over the same keychain, settings,
+/// directory and known-peers store.
+pub async fn restart(old: TestNode) -> TestNode {
+    let TestNode {
+        node,
+        identity,
+        dir,
+        keychain,
+        settings,
+        tickets,
+        options,
+        wrapper,
+        ..
+    } = old;
+    node.shutdown().await;
+    start(identity, dir, keychain, settings, tickets, options, wrapper).await
+}
+
+async fn start(
+    identity: TestIdentity,
+    dir: TempDir,
+    keychain: Arc<FakeKeychain>,
+    settings: Arc<MemorySettingsStore>,
+    tickets: LiveTicketProvider,
+    options: TestOptions,
+    wrapper: Option<SettingsWrapper>,
+) -> TestNode {
+    let settings_dyn: Arc<dyn SettingsStore + Send + Sync> = match &wrapper {
+        Some(wrap) => wrap(settings.clone()),
+        None => settings.clone(),
+    };
+    let node = Node::start(
+        &identity,
+        NodeDeps {
+            settings: settings_dyn,
+            known: options.known.clone(),
+            tickets: tickets.clone(),
+        },
+        options.config.clone(),
+    )
+    .await
+    .expect("node start");
+    TestNode {
+        node,
+        identity,
+        known: options.known.clone(),
+        dir,
+        keychain,
+        settings,
+        tickets,
+        options,
+        wrapper,
+    }
+}
+
+/// The next event within `timeout`, skipping lag notices.
+pub async fn next_event(
+    rx: &mut broadcast::Receiver<NetEvent>,
+    timeout: Duration,
+) -> Option<NetEvent> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Ok(event)) => return Some(event),
+            Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(broadcast::error::RecvError::Closed)) | Err(_) => return None,
+        }
+    }
+}
+
+/// The bytes of a valid Hello frame announcing `name`.
+pub fn hello_frame(name: &str) -> Vec<u8> {
+    encode_hello(name)
+}
+
+/// A bare iroh endpoint with a fresh identity that has dialed a node and sent
+/// arbitrary bytes. Dropping it ends the connection.
+pub struct RawDial {
+    pub conn: Connection,
+    _endpoint: Endpoint,
+}
+
+pub async fn raw_dial(addr: EndpointAddr, first_frame: &[u8]) -> Result<RawDial, String> {
+    let endpoint = Endpoint::builder(presets::Minimal)
+        .secret_key(SecretKey::generate())
+        .relay_mode(RelayMode::Disabled)
+        .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+        .map_err(|e| e.to_string())?
+        .bind()
+        .await
+        .map_err(|e| e.to_string())?;
+    let conn = endpoint
+        .connect(addr, ALPN)
+        .await
+        .map_err(|e| e.to_string())?;
+    let (mut send, _recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
+    // The acceptor may close mid-write on oversized input; that is the test.
+    let _ = send.write_all(first_frame).await;
+    let _ = send.finish();
+    Ok(RawDial {
+        conn,
+        _endpoint: endpoint,
+    })
+}

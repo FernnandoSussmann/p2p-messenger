@@ -12,6 +12,7 @@ vi.mock("./identity", () => ({
   identitySetDisplayName: (n: string) => setName(n),
   describeError: () => "boom",
 }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 
 const info = (display_name: string | null) => ({

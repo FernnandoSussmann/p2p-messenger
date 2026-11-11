@@ -4,17 +4,22 @@
 //! can be tested without a Tauri runtime; the `#[tauri::command]` wrappers only
 //! forward the managed state. DTOs carry public data only.
 
+use std::sync::Arc;
+
+use messenger_core::discovery::LiveTicketProvider;
 use messenger_core::identity::KeychainStore;
 use messenger_core::identity::{
     DisplayNameError, FileSettingsStore, IdentityService, IdentityStatus, KeychainError, LoadError,
-    MarkerError, MyInfoError, NodeIdTicketProvider, OsKeychain, ProvisionError, SetNameError,
-    SettingsStore, StatusError, TicketProvider,
+    MarkerError, MyInfoError, OsKeychain, ProvisionError, SetNameError, SettingsStore, StatusError,
+    TicketProvider,
 };
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
+
+use crate::net_cmd;
 
 /// The service as wired by the app.
-pub type AppIdentity = IdentityService<OsKeychain, FileSettingsStore, NodeIdTicketProvider>;
+pub type AppIdentity = IdentityService<OsKeychain, Arc<FileSettingsStore>, LiveTicketProvider>;
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
@@ -181,17 +186,21 @@ pub fn identity_status(service: State<'_, AppIdentity>) -> StatusDto {
 
 #[tauri::command]
 pub fn identity_provision(
+    app: AppHandle,
     service: State<'_, AppIdentity>,
 ) -> Result<ProvisionDto, IdentityCmdError> {
-    provision(&service)
+    let provisioned = provision(&service)?;
+    net_cmd::ensure_started(&app);
+    Ok(provisioned)
 }
 
 #[tauri::command]
 pub fn identity_set_display_name(
     service: State<'_, AppIdentity>,
+    net: State<'_, net_cmd::NetState>,
     name: String,
 ) -> Result<(), IdentityCmdError> {
-    set_display_name(&service, &name)
+    net_cmd::set_display_name_and_refresh(&service, &net, &name)
 }
 
 #[tauri::command]
@@ -204,9 +213,10 @@ mod tests {
     use std::sync::Arc;
 
     use messenger_core::identity::testing::FakeKeychain;
-    use messenger_core::identity::MemorySettingsStore;
+    use messenger_core::identity::{MemorySettingsStore, NodeIdTicketProvider};
 
     use super::*;
+    use crate::test_util::assert_forms_absent;
 
     type TestService =
         IdentityService<Arc<FakeKeychain>, MemorySettingsStore, NodeIdTicketProvider>;
@@ -434,35 +444,5 @@ mod tests {
         assert!(jsons[0].contains(&provisioned.account_id));
         assert!(jsons[1].contains(&provisioned.node_id));
         assert!(jsons[2].contains(&provisioned.node_id));
-    }
-
-    fn assert_forms_absent(json: &str, key: &[u8; 32]) {
-        let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
-        let decimal = format!("{key:?}");
-        let decimal_compact = decimal.replace(' ', "");
-        assert!(!json.to_lowercase().contains(&hex));
-        assert!(!json.contains(&decimal));
-        assert!(!json.contains(&decimal_compact));
-        assert!(!json.contains(&base64_standard(key)));
-    }
-
-    fn base64_standard(bytes: &[u8]) -> String {
-        const ALPHABET: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::new();
-        for chunk in bytes.chunks(3) {
-            let n = chunk
-                .iter()
-                .enumerate()
-                .fold(0u32, |acc, (i, b)| acc | (u32::from(*b) << (16 - 8 * i)));
-            for i in 0..4 {
-                if i <= chunk.len() {
-                    out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
-                } else {
-                    out.push('=');
-                }
-            }
-        }
-        out
     }
 }

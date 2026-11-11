@@ -1,0 +1,11 @@
+**/target/
+**/node_modules/
+app/dist/
+.git/
+**/*.key
+**/*.pem
+.env*
+**/keyring/
+**/control.sock
+.claude/
+design_docs/

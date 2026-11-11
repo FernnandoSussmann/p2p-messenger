@@ -2,12 +2,17 @@
 //!
 //! [`MemorySettingsStore`] is the test double. [`FileSettingsStore`] is the
 //! **interim** durable store. DD-05 replaces both with a SQLCipher-backed store
-//! opened with the `DbKey`. Both hold the display name and provisioning
-//! timestamp only, and never any secret.
+//! opened with the `DbKey`. Both hold the display name, provisioning
+//! timestamp, LAN presence flag and relay override only, and never any secret.
 //!
 //! `FileSettingsStore` deliberately deviates from DD-01 ("encrypted DB"): it
-//! keeps those two low-sensitivity values in a plaintext JSON file in the app
+//! keeps these low-sensitivity values in a plaintext JSON file in the app
 //! data dir. DD-05 removes this deviation.
+//!
+//! Interim deviation from DD-02: presence and the relay override should live
+//! in the DD-05 settings table keyed by `account_id`. That table does not
+//! exist yet, so they sit in the same per-account entry; DD-05 migrates them
+//! with the rest of the settings.
 //!
 //! The `DbKey` is created before the display name is captured, so the
 //! encrypted store is already openable when the first setting is written.
@@ -17,8 +22,10 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Mutex;
 
+use iroh::RelayUrl;
 use serde::{Deserialize, Serialize};
 
 use super::{validate_display_name, AccountId, DisplayName};
@@ -44,12 +51,78 @@ pub trait SettingsStore {
     fn get_display_name(&self, id: &AccountId) -> Result<Option<DisplayName>, SettingsError>;
     fn set_provisioned_at(&self, id: &AccountId, unix_ms: i64) -> Result<(), SettingsError>;
     fn get_provisioned_at(&self, id: &AccountId) -> Result<Option<i64>, SettingsError>;
+    /// `None` means the user never chose, which is ON.
+    fn get_presence(&self, id: &AccountId) -> Result<Option<bool>, SettingsError>;
+    fn set_presence(&self, id: &AccountId, on: bool) -> Result<(), SettingsError>;
+    fn get_relay_url(&self, id: &AccountId) -> Result<Option<String>, SettingsError>;
+    /// Validates with [`validate_relay_url`] and stores the canonical form;
+    /// `None` clears the override.
+    fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError>;
+}
+
+const MAX_RELAY_URL_BYTES: usize = 2048;
+
+/// A relay URL is accepted if it parses, is at most 2048 bytes, and is
+/// `https` (or `http` for a loopback host only). Returns the canonical string.
+pub fn validate_relay_url(raw: &str) -> Result<String, SettingsError> {
+    if raw.len() > MAX_RELAY_URL_BYTES {
+        return Err(SettingsError::Unavailable);
+    }
+    let url = RelayUrl::from_str(raw).map_err(|_| SettingsError::Unavailable)?;
+    let allowed = match url.scheme() {
+        "https" => true,
+        "http" => match url.host_str() {
+            Some(host) => {
+                let host = host.trim_start_matches('[').trim_end_matches(']');
+                host.eq_ignore_ascii_case("localhost")
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            }
+            None => false,
+        },
+        _ => false,
+    };
+    if allowed {
+        Ok(url.to_string())
+    } else {
+        Err(SettingsError::Unavailable)
+    }
+}
+
+impl<T: SettingsStore + ?Sized> SettingsStore for std::sync::Arc<T> {
+    fn set_display_name(&self, id: &AccountId, name: &DisplayName) -> Result<(), SettingsError> {
+        (**self).set_display_name(id, name)
+    }
+    fn get_display_name(&self, id: &AccountId) -> Result<Option<DisplayName>, SettingsError> {
+        (**self).get_display_name(id)
+    }
+    fn set_provisioned_at(&self, id: &AccountId, unix_ms: i64) -> Result<(), SettingsError> {
+        (**self).set_provisioned_at(id, unix_ms)
+    }
+    fn get_provisioned_at(&self, id: &AccountId) -> Result<Option<i64>, SettingsError> {
+        (**self).get_provisioned_at(id)
+    }
+    fn get_presence(&self, id: &AccountId) -> Result<Option<bool>, SettingsError> {
+        (**self).get_presence(id)
+    }
+    fn set_presence(&self, id: &AccountId, on: bool) -> Result<(), SettingsError> {
+        (**self).set_presence(id, on)
+    }
+    fn get_relay_url(&self, id: &AccountId) -> Result<Option<String>, SettingsError> {
+        (**self).get_relay_url(id)
+    }
+    fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError> {
+        (**self).set_relay_url(id, url)
+    }
 }
 
 #[derive(Default)]
 struct AccountSettings {
     display_name: Option<DisplayName>,
     provisioned_at: Option<i64>,
+    presence_enabled: Option<bool>,
+    relay_url: Option<String>,
 }
 
 #[derive(Default)]
@@ -91,6 +164,23 @@ impl SettingsStore for MemorySettingsStore {
     fn get_provisioned_at(&self, id: &AccountId) -> Result<Option<i64>, SettingsError> {
         self.with_account(id, |s| s.provisioned_at)
     }
+
+    fn get_presence(&self, id: &AccountId) -> Result<Option<bool>, SettingsError> {
+        self.with_account(id, |s| s.presence_enabled)
+    }
+
+    fn set_presence(&self, id: &AccountId, on: bool) -> Result<(), SettingsError> {
+        self.with_account(id, |s| s.presence_enabled = Some(on))
+    }
+
+    fn get_relay_url(&self, id: &AccountId) -> Result<Option<String>, SettingsError> {
+        self.with_account(id, |s| s.relay_url.clone())
+    }
+
+    fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError> {
+        let canonical = url.map(validate_relay_url).transpose()?;
+        self.with_account(id, |s| s.relay_url = canonical)
+    }
 }
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -103,6 +193,10 @@ const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 struct StoredAccount {
     display_name: Option<String>,
     provisioned_at: Option<i64>,
+    #[serde(default)]
+    presence_enabled: Option<bool>,
+    #[serde(default)]
+    relay_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -217,6 +311,8 @@ impl FileSettingsStore {
             .or_insert(StoredAccount {
                 display_name: None,
                 provisioned_at: None,
+                presence_enabled: None,
+                relay_url: None,
             }));
         self.write_document(&doc)
     }
@@ -242,6 +338,26 @@ impl SettingsStore for FileSettingsStore {
 
     fn get_provisioned_at(&self, id: &AccountId) -> Result<Option<i64>, SettingsError> {
         self.read_account(id, |a| Ok(a.and_then(|a| a.provisioned_at)))
+    }
+
+    fn get_presence(&self, id: &AccountId) -> Result<Option<bool>, SettingsError> {
+        self.read_account(id, |a| Ok(a.and_then(|a| a.presence_enabled)))
+    }
+
+    fn set_presence(&self, id: &AccountId, on: bool) -> Result<(), SettingsError> {
+        self.update_account(id, |a| a.presence_enabled = Some(on))
+    }
+
+    fn get_relay_url(&self, id: &AccountId) -> Result<Option<String>, SettingsError> {
+        self.read_account(id, |a| match a.and_then(|a| a.relay_url.as_deref()) {
+            Some(raw) => validate_relay_url(raw).map(Some),
+            None => Ok(None),
+        })
+    }
+
+    fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError> {
+        let canonical = url.map(validate_relay_url).transpose()?;
+        self.update_account(id, |a| a.relay_url = canonical)
     }
 }
 
@@ -400,11 +516,128 @@ mod tests {
     }
 
     #[test]
+    fn presence_defaults_to_none_and_round_trips_in_both_stores() {
+        let (_dir, file) = file_store();
+        let memory = MemorySettingsStore::new();
+        let stores: [&dyn SettingsStore; 2] = [&file, &memory];
+        for store in stores {
+            let id = AccountId::new();
+            assert_eq!(store.get_presence(&id).unwrap(), None);
+            store.set_presence(&id, false).unwrap();
+            assert_eq!(store.get_presence(&id).unwrap(), Some(false));
+            store.set_presence(&id, true).unwrap();
+            assert_eq!(store.get_presence(&id).unwrap(), Some(true));
+        }
+    }
+
+    #[test]
+    fn relay_url_round_trips_canonicalizes_and_clears_in_both_stores() {
+        let (_dir, file) = file_store();
+        let memory = MemorySettingsStore::new();
+        let stores: [&dyn SettingsStore; 2] = [&file, &memory];
+        for store in stores {
+            let id = AccountId::new();
+            assert_eq!(store.get_relay_url(&id).unwrap(), None);
+            store
+                .set_relay_url(&id, Some("https://relay.example"))
+                .unwrap();
+            let stored = store.get_relay_url(&id).unwrap().unwrap();
+            assert_eq!(stored, "https://relay.example/");
+            store.set_relay_url(&id, None).unwrap();
+            assert_eq!(store.get_relay_url(&id).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn relay_url_validation_rejects_bad_schemes_and_sizes() {
+        let (_dir, file) = file_store();
+        let memory = MemorySettingsStore::new();
+        let stores: [&dyn SettingsStore; 2] = [&file, &memory];
+        let too_long = format!("https://{}.example", "a".repeat(2100));
+        for store in stores {
+            let id = AccountId::new();
+            for bad in [
+                "http://relay.example",
+                "ftp://relay.example",
+                "not a url",
+                "",
+                "http://192.168.1.5",
+                too_long.as_str(),
+            ] {
+                assert!(
+                    matches!(
+                        store.set_relay_url(&id, Some(bad)),
+                        Err(SettingsError::Unavailable)
+                    ),
+                    "should reject {bad:?}"
+                );
+            }
+            for ok in [
+                "http://localhost:3340",
+                "http://127.0.0.1:3340",
+                "http://[::1]:3340",
+            ] {
+                store.set_relay_url(&id, Some(ok)).unwrap();
+            }
+            assert!(store.get_relay_url(&id).unwrap().is_some());
+        }
+    }
+
+    #[test]
+    fn presence_and_relay_are_isolated_per_account() {
+        let (_dir, store) = file_store();
+        let (a, b) = (AccountId::new(), AccountId::new());
+        store.set_presence(&a, false).unwrap();
+        store
+            .set_relay_url(&a, Some("https://relay.example"))
+            .unwrap();
+        assert_eq!(store.get_presence(&b).unwrap(), None);
+        assert_eq!(store.get_relay_url(&b).unwrap(), None);
+    }
+
+    #[test]
+    fn old_v1_file_without_new_fields_parses() {
+        let (dir, store) = file_store();
+        let id = AccountId::new();
+        let doc = serde_json::json!({
+            "version": 1,
+            "accounts": { id.as_uuid().hyphenated().to_string(): {
+                "display_name": "Ada", "provisioned_at": 5
+            } }
+        });
+        fs::write(settings_path(&dir), doc.to_string()).unwrap();
+        assert_eq!(store.get_provisioned_at(&id).unwrap(), Some(5));
+        assert_eq!(store.get_presence(&id).unwrap(), None);
+        assert_eq!(store.get_relay_url(&id).unwrap(), None);
+    }
+
+    #[test]
+    fn tampered_relay_url_in_file_is_unavailable() {
+        let (dir, store) = file_store();
+        let id = AccountId::new();
+        let doc = serde_json::json!({
+            "version": 1,
+            "accounts": { id.as_uuid().hyphenated().to_string(): {
+                "relay_url": "http://evil.example"
+            } }
+        });
+        fs::write(settings_path(&dir), doc.to_string()).unwrap();
+        assert!(matches!(
+            store.get_relay_url(&id),
+            Err(SettingsError::Unavailable)
+        ));
+    }
+
+    #[test]
     fn file_store_file_contains_no_secrets_and_only_known_keys() {
         let (dir, store) = file_store();
         let id = AccountId::new();
         store.set_display_name(&id, &name("Ada")).unwrap();
         store.set_provisioned_at(&id, 7).unwrap();
+        store.set_presence(&id, false).unwrap();
+        store
+            .set_relay_url(&id, Some("https://relay.example"))
+            .unwrap();
         let v: serde_json::Value =
             serde_json::from_slice(&fs::read(settings_path(&dir)).unwrap()).unwrap();
         let mut top: Vec<_> = v.as_object().unwrap().keys().cloned().collect();
@@ -413,7 +646,15 @@ mod tests {
         for account in v["accounts"].as_object().unwrap().values() {
             let mut keys: Vec<_> = account.as_object().unwrap().keys().cloned().collect();
             keys.sort();
-            assert_eq!(keys, vec!["display_name", "provisioned_at"]);
+            assert_eq!(
+                keys,
+                vec![
+                    "display_name",
+                    "presence_enabled",
+                    "provisioned_at",
+                    "relay_url"
+                ]
+            );
         }
     }
 

@@ -15,6 +15,13 @@ if grep -RnE 'SecretKeyBytes|DbKey' app \
   exit 1
 fi
 
+# Test-only backends must never reach the desktop shell.
+if grep -RnE 'FileKeychain|messenger-headless|messenger_headless' app \
+  --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=target --exclude-dir=gen; then
+  echo "pre-commit: test-only keyring/headless referenced in app/" >&2
+  exit 1
+fi
+
 # Clipboard gate: only MyInfo.svelte (and tests) may touch the clipboard.
 hits=$(grep -RlE 'writeText|clipboard' app/src --exclude='*.test.ts' || true)
 if [ -n "$hits" ] && [ "$hits" != "app/src/views/MyInfo.svelte" ]; then

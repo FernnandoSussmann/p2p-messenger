@@ -1,6 +1,7 @@
 //! The OS-keychain boundary: the only place the two identity secrets are persisted.
 //!
-//! Entries live under one service ([`APP_KEYCHAIN_SERVICE`]) and are keyed per
+//! Entries live under one service ([`APP_KEYCHAIN_SERVICE`], or a profile's own
+//! service) and are keyed per
 //! account as `<account_id>/identity-key` and `<account_id>/db-key`.
 
 use std::fmt;
@@ -8,7 +9,7 @@ use std::fmt;
 use keyring_core::Entry;
 use zeroize::Zeroizing;
 
-use super::{AccountId, DbKey, SecretKeyBytes};
+use super::{AccountId, DbKey, Profile, SecretKeyBytes};
 
 pub const APP_KEYCHAIN_SERVICE: &str = "com.p2p-messenger.identity";
 
@@ -61,23 +62,36 @@ pub trait KeychainStore {
 
 /// [`KeychainStore`] backed by the default `keyring` credential store.
 #[derive(Debug)]
-pub struct OsKeychain(());
+pub struct OsKeychain {
+    service: String,
+}
 
 impl OsKeychain {
     /// Initialises the platform credential store and returns a handle to it.
     pub fn native() -> Result<Self, KeychainError> {
+        Self::native_for(None)
+    }
+
+    /// Like [`OsKeychain::native`], but under the profile's own service name
+    /// when a profile is given. `None` is exactly `native()`.
+    pub fn native_for(profile: Option<&Profile>) -> Result<Self, KeychainError> {
         match keyring::Entry::store_status() {
-            Ok(()) => Ok(Self(())),
+            Ok(()) => Ok(Self {
+                service: profile.map_or_else(
+                    || APP_KEYCHAIN_SERVICE.to_owned(),
+                    Profile::keychain_service,
+                ),
+            }),
             Err(err) => Err(KeychainError::Backend(err.to_string())),
         }
     }
 
-    fn entry(id: &AccountId, suffix: &str) -> Result<Entry, KeychainError> {
-        Ok(Entry::new(APP_KEYCHAIN_SERVICE, &account_name(id, suffix))?)
+    fn entry(&self, id: &AccountId, suffix: &str) -> Result<Entry, KeychainError> {
+        Ok(Entry::new(&self.service, &account_name(id, suffix))?)
     }
 
-    fn load_key(id: &AccountId, suffix: &str) -> Result<Zeroizing<[u8; 32]>, KeychainError> {
-        let raw = Zeroizing::new(Self::entry(id, suffix)?.get_secret()?);
+    fn load_key(&self, id: &AccountId, suffix: &str) -> Result<Zeroizing<[u8; 32]>, KeychainError> {
+        let raw = Zeroizing::new(self.entry(id, suffix)?.get_secret()?);
         let bytes = <[u8; 32]>::try_from(raw.as_slice())
             .map_err(|_| KeychainError::Backend("stored key has wrong length".into()))?;
         Ok(Zeroizing::new(bytes))
@@ -94,30 +108,31 @@ impl KeychainStore for OsKeychain {
         id: &AccountId,
         key: &SecretKeyBytes,
     ) -> Result<(), KeychainError> {
-        Ok(Self::entry(id, IDENTITY_KEY_SUFFIX)?.set_secret(key.as_bytes())?)
+        Ok(self
+            .entry(id, IDENTITY_KEY_SUFFIX)?
+            .set_secret(key.as_bytes())?)
     }
 
     fn store_db_key(&self, id: &AccountId, key: &DbKey) -> Result<(), KeychainError> {
-        Ok(Self::entry(id, DB_KEY_SUFFIX)?.set_secret(key.as_bytes())?)
+        Ok(self.entry(id, DB_KEY_SUFFIX)?.set_secret(key.as_bytes())?)
     }
 
     fn load_identity_key(&self, id: &AccountId) -> Result<SecretKeyBytes, KeychainError> {
-        Ok(SecretKeyBytes::from_bytes(*Self::load_key(
-            id,
-            IDENTITY_KEY_SUFFIX,
-        )?))
+        Ok(SecretKeyBytes::from_bytes(
+            *self.load_key(id, IDENTITY_KEY_SUFFIX)?,
+        ))
     }
 
     fn load_db_key(&self, id: &AccountId) -> Result<DbKey, KeychainError> {
-        Ok(DbKey::from_bytes(*Self::load_key(id, DB_KEY_SUFFIX)?))
+        Ok(DbKey::from_bytes(*self.load_key(id, DB_KEY_SUFFIX)?))
     }
 
     fn delete_identity_key(&self, id: &AccountId) -> Result<(), KeychainError> {
-        Ok(Self::entry(id, IDENTITY_KEY_SUFFIX)?.delete_credential()?)
+        Ok(self.entry(id, IDENTITY_KEY_SUFFIX)?.delete_credential()?)
     }
 
     fn delete_db_key(&self, id: &AccountId) -> Result<(), KeychainError> {
-        Ok(Self::entry(id, DB_KEY_SUFFIX)?.delete_credential()?)
+        Ok(self.entry(id, DB_KEY_SUFFIX)?.delete_credential()?)
     }
 }
 
@@ -266,7 +281,7 @@ mod tests {
         INSTALL.call_once(|| {
             keyring_core::set_default_store(mock::Store::new().expect("mock store"));
         });
-        OsKeychain(())
+        OsKeychain::native().expect("mock store")
     }
 
     #[test]
@@ -319,7 +334,8 @@ mod tests {
     fn wrong_length_secret_is_a_backend_error() {
         let keychain = mock_keychain();
         let id = AccountId::new();
-        OsKeychain::entry(&id, DB_KEY_SUFFIX)
+        keychain
+            .entry(&id, DB_KEY_SUFFIX)
             .unwrap()
             .set_secret(&[1, 2, 3])
             .unwrap();
