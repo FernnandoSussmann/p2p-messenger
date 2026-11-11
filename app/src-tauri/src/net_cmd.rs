@@ -477,7 +477,7 @@ mod tests {
         state: ConnectionState,
     ) -> impl Fn(&NetEvent) -> bool {
         move |ev| {
-            matches!(ev, NetEvent::ConnectionState { node_id, direction: d, state: s }
+            matches!(ev, NetEvent::ConnectionState { node_id, direction: d, state: s, .. }
                 if *node_id == peer && *d == direction && *s == state)
         }
     }

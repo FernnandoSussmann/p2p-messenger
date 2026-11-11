@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use core::discovery::testing::{
-    hello_frame, next_event, spawn_test_node_with, MemoryKnownPeers, TestNode, TestOptions,
+    hello_frame, next_event, spawn_test_node_with, TestNode, TestOptions,
 };
 use core::discovery::{ConnectionState, NetEvent, NodeConfig};
 use core::identity::Ticket;
@@ -69,11 +69,9 @@ async fn pipe(
 }
 
 async fn relay_node(name: &str, relay: &RelayUrl) -> TestNode {
-    let options = TestOptions {
-        config: NodeConfig::relay_only(relay.clone())
-            .with_ca_tls(CaTlsConfig::insecure_skip_verify()),
-        known: Arc::new(MemoryKnownPeers::new()),
-    };
+    let mut options = TestOptions::default();
+    options.config =
+        NodeConfig::relay_only(relay.clone()).with_ca_tls(CaTlsConfig::insecure_skip_verify());
     spawn_test_node_with(name, options).await
 }
 

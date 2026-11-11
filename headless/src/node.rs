@@ -353,6 +353,7 @@ mod tests {
                 node_id: id,
                 direction: Direction::Inbound,
                 state: ConnectionState::Connected,
+                display_name: None,
             },
             NetEvent::LanPeersChanged(Vec::new()),
         ]
