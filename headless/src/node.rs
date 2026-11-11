@@ -323,6 +323,7 @@ async fn handle(node: Arc<Node>, log: Arc<EventLog>, request: Request) -> Reply 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::WaitEvent;
 
     #[test]
     fn headless_disables_internet_lookup_but_desktop_keeps_it() {
@@ -335,6 +336,36 @@ mod tests {
         };
         assert!(!node_config(&args).unwrap().internet_lookup());
         assert!(NodeConfig::desktop().internet_lookup());
+    }
+
+    #[test]
+    fn wait_selectors_are_names_produced_by_event_json() {
+        use messenger_core::discovery::{
+            event_json, ConnectionState, Direction, IncomingRequest, NetEvent,
+        };
+        let id = iroh::SecretKey::from_bytes(&[1; 32]).public();
+        let produced: Vec<&str> = [
+            NetEvent::IncomingRequest(IncomingRequest {
+                node_id: id,
+                display_name: None,
+            }),
+            NetEvent::ConnectionState {
+                node_id: id,
+                direction: Direction::Inbound,
+                state: ConnectionState::Connected,
+            },
+            NetEvent::LanPeersChanged(Vec::new()),
+        ]
+        .iter()
+        .map(|ev| event_json(ev).0)
+        .collect();
+        assert_eq!(produced, WAIT_EVENTS);
+        let selectors = [
+            WaitEvent::IncomingRequest,
+            WaitEvent::ConnectionState,
+            WaitEvent::LanPeersChanged,
+        ];
+        assert_eq!(selectors.map(WaitEvent::name), WAIT_EVENTS);
     }
 
     fn filter<'a>(name: &'a str, node: Option<&'a str>, state: Option<&'a str>) -> EventFilter<'a> {
