@@ -176,7 +176,7 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
     to you still works. Turn it on: you reappear with your current name.
 11. Rename yourself while visible: the other instance shows the new name.
 12. Contacts is the default tab; the empty state shows with no contacts.
-13. After Accept, the row shows only the bold nickname, the gray truncated
+13. The Accept prompt's nickname is prefilled with their name (or "Peer <id>") and is editable; clearing it disables Accept. After Accept, the row shows only the bold nickname, the gray truncated
     NodeId and Unverified; the peer's own name is not in the row. Hovering shows
     the full NodeId; Show full NodeId reveals selectable text and Ctrl/Cmd+C
     copies it.
