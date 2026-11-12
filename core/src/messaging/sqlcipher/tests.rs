@@ -216,3 +216,104 @@ fn insert_rejects_empty_and_oversized_bodies() {
         .unwrap();
     assert_eq!(store.page(&account, &peer, None, 10).unwrap().len(), 1);
 }
+
+fn page_count(store: &SqlCipherMessageStore) -> i64 {
+    store
+        .conn()
+        .unwrap()
+        .pragma_query_value(None, "page_count", |r| r.get(0))
+        .unwrap()
+}
+
+fn fill(store: &SqlCipherMessageStore, account: &AccountId, peer: &NodeId, n: u32, body: &str) {
+    for i in 0..n {
+        store
+            .insert_outgoing(
+                account,
+                peer,
+                &chat(i64::from(i) + 1, &format!("{body} {i}")),
+                MessageStatus::Sending,
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn erase_reclaims_free_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, account, gone) = (open(&dir, &key()), AccountId::new(), node());
+    fill(&store, &account, &gone, 500, &"filler text ".repeat(20));
+    let before = page_count(&store);
+    store.erase_peer_history(&account, &gone).unwrap();
+    assert_eq!(store.freelist_count().unwrap(), 0);
+    assert!(page_count(&store) < before);
+}
+
+#[test]
+fn vacuumed_db_reopens_with_key_and_rejects_wrong_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let (k, account, keep, gone) = (key(), AccountId::new(), node(), node());
+    let store = open(&dir, &k);
+    fill(&store, &account, &keep, 3, "kept");
+    fill(&store, &account, &gone, 50, "erased");
+    store.erase_peer_history(&account, &gone).unwrap();
+    drop(store);
+    let reopened = open(&dir, &k);
+    assert_eq!(reopened.page(&account, &keep, None, 10).unwrap().len(), 3);
+    assert!(reopened.page(&account, &gone, None, 10).unwrap().is_empty());
+    drop(reopened);
+    assert!(Database::open(&db_path(&dir), &key(), MIGRATIONS, Create::Forbidden).is_err());
+}
+
+#[test]
+fn erase_raw_file_has_no_canary() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, account, keep, gone) = (open(&dir, &key()), AccountId::new(), node(), node());
+    let secret = canary();
+    fill(&store, &account, &keep, 5, "control");
+    fill(&store, &account, &gone, 20, &secret);
+    store.erase_peer_history(&account, &gone).unwrap();
+    for bytes in files_with_prefix(dir.path(), "") {
+        assert!(!contains(&bytes, secret.as_bytes()));
+    }
+}
+
+fn peak_rss_kb() -> Option<u64> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmHWM:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
+}
+
+#[test]
+#[ignore = "manual measurement: cargo test -p core --features test-support --lib vacuum_cost -- --ignored --nocapture"]
+fn vacuum_cost_on_100k_messages() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, account) = (open(&dir, &key()), AccountId::new());
+    let peers: Vec<NodeId> = (0..50).map(|_| node()).collect();
+    let body = "x".repeat(200);
+    {
+        let mut conn = store.conn().unwrap();
+        let tx = conn.transaction().unwrap();
+        for i in 0..100_000usize {
+            tx.execute(
+                "INSERT INTO messages (account_id, peer, message_id, direction, sent_at_ms, body, status) VALUES (?1, ?2, ?3, 'out', ?4, ?5, 'sent')",
+                rusqlite::params![
+                    account.as_uuid().as_bytes().as_slice(),
+                    peers[i % 50].to_string(),
+                    uuid::Uuid::new_v4().as_bytes().as_slice(),
+                    i as i64,
+                    format!("{body}{i}"),
+                ],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    let size = fs::metadata(db_path(&dir)).unwrap().len();
+    let rss_before = peak_rss_kb();
+    let start = std::time::Instant::now();
+    store.erase_peer_history(&account, &peers[0]).unwrap();
+    let elapsed = start.elapsed();
+    let delta = rss_before.zip(peak_rss_kb()).map(|(a, b)| b - a);
+    println!("db_bytes={size} wall={elapsed:?} rss_delta_kb={delta:?}");
+}

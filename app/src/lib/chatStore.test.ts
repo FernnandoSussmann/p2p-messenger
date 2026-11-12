@@ -17,7 +17,7 @@ vi.mock("../chat", async (orig) => ({
 
 import { chatHistory, chatSend, chatResend, type MessageDto } from "../chat";
 import {
-  activeChat, closeChat, conversation, loadOlder, openChat, resendMessage, sendMessage, startChatEvents, unread,
+  activeChat, closeChat, conversation, loadOlder, openChat, resendMessage, resetConversation, sendMessage, startChatEvents, unread,
 } from "./chatStore";
 
 const A = "a".repeat(64);
@@ -198,5 +198,18 @@ describe("chatStore", () => {
     await resendMessage(x.id);
     expect(chatResend).toHaveBeenCalledWith(A, x.id);
     expect(status(x.id)).toBe("sending");
+  });
+
+  it("resetConversation empties only that peer and clears its unread count", async () => {
+    page([mk(), mk()], "tok");
+    await openChat(A);
+    unread.set({ [A]: 2, [B]: 3 });
+    resetConversation(B);
+    expect(get(conversation)!.messages).toHaveLength(2);
+    expect(get(unread)).toEqual({ [A]: 2, [B]: 0 });
+    resetConversation(A);
+    const c = get(conversation)!;
+    expect([c.messages, c.nextBefore, c.error]).toEqual([[], null, null]);
+    expect(get(unread)[A]).toBe(0);
   });
 });

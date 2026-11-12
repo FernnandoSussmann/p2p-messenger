@@ -1,6 +1,22 @@
 //! SQLCipher-backed [`MessageStore`].
 //!
 //! All SQL is constant text; every value goes through a bound parameter.
+//!
+//! Erasing a peer deletes the rows (the `messages_ad` trigger drops their FTS
+//! rows), merges the trigram postings with `optimize`, then runs `VACUUM`.
+//! `secure_delete=ON` (verified at open) zero-fills freed content before a page
+//! is encrypted and written, and `VACUUM` leaves the file with no free pages.
+//! The rollback journal (default `DELETE` mode) holds only SQLCipher-encrypted
+//! pages and is unlinked after commit. This does not cover old file blocks on
+//! SSDs or copy-on-write file systems, OS backups and snapshots, or the peer's
+//! own copy. It is not a "secure erase".
+//!
+//! `VACUUM` holds the connection for the whole rewrite, so erasing must run
+//! off the async runtime. Cost, measured with the ignored test
+//! `vacuum_cost_on_100k_messages`: 95 MB database (100 000 messages
+//! of about 200 bytes over 50 peers, one peer cleared), debug build: 3.1 s wall,
+//! 85 MB peak-RSS growth (under 2x the file size). Above the 2 s budget, so the
+//! UI busy text says "This may take a moment."; `temp_store` stays `MEMORY`.
 
 use std::sync::{Arc, MutexGuard};
 
@@ -88,6 +104,14 @@ pub struct SqlCipherMessageStore {
 impl SqlCipherMessageStore {
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
+    }
+
+    /// Free pages in the file; 0 after every successful erase.
+    #[cfg(feature = "test-support")]
+    pub fn freelist_count(&self) -> Result<i64, MessageStoreError> {
+        self.conn()?
+            .pragma_query_value(None, "freelist_count", |r| r.get(0))
+            .map_err(|_| MessageStoreError::Unavailable)
     }
 
     fn conn(&self) -> Result<MutexGuard<'_, Connection>, MessageStoreError> {
@@ -375,18 +399,22 @@ impl HistoryEraser for SqlCipherMessageStore {
         account: &AccountId,
         peer: &NodeId,
     ) -> Result<(), HistoryEraseError> {
-        let mut conn = self.conn().map_err(|_| HistoryEraseError)?;
-        let tx = conn.transaction().map_err(|_| HistoryEraseError)?;
-        tx.execute(
-            SQL_ERASE,
-            params![account.as_uuid().as_bytes().as_slice(), peer.to_string()],
-        )
-        .map_err(|_| HistoryEraseError)?;
-        // The external-content 'delete' only adds tombstones; optimize merges
-        // the segments so the erased trigram postings are gone.
-        tx.execute(SQL_FTS_OPTIMIZE, [])
+        {
+            let mut conn = self.conn().map_err(|_| HistoryEraseError)?;
+            let tx = conn.transaction().map_err(|_| HistoryEraseError)?;
+            tx.execute(
+                SQL_ERASE,
+                params![account.as_uuid().as_bytes().as_slice(), peer.to_string()],
+            )
             .map_err(|_| HistoryEraseError)?;
-        tx.commit().map_err(|_| HistoryEraseError)
+            // The external-content 'delete' only adds tombstones; optimize merges
+            // the segments so the erased trigram postings are gone.
+            tx.execute(SQL_FTS_OPTIMIZE, [])
+                .map_err(|_| HistoryEraseError)?;
+            tx.commit().map_err(|_| HistoryEraseError)?;
+        }
+        // The rows are gone even if this fails; the caller may retry (idempotent).
+        self.db.reclaim().map_err(|_| HistoryEraseError)
     }
 }
 

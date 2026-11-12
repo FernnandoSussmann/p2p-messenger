@@ -80,6 +80,25 @@ impl Database {
     pub(crate) fn conn(&self) -> Result<MutexGuard<'_, Connection>, StorageError> {
         self.conn.lock().map_err(|_| StorageError::Io)
     }
+
+    /// Rebuilds the file so no free page can hold deleted ciphertext. Must run
+    /// outside any transaction and without the guard from [`Database::conn`]
+    /// held. It holds the connection for the whole rebuild and, with
+    /// `temp_store=MEMORY`, keeps the rebuild image in RAM, so async callers
+    /// must use `spawn_blocking`.
+    pub(crate) fn reclaim(&self) -> Result<(), StorageError> {
+        let conn = self.conn()?;
+        conn.execute_batch("VACUUM;")
+            .map_err(|_| StorageError::Io)?;
+        let free: i64 = conn
+            .pragma_query_value(None, "freelist_count", |r| r.get(0))
+            .map_err(|_| StorageError::Io)?;
+        if free == 0 {
+            Ok(())
+        } else {
+            Err(StorageError::Io)
+        }
+    }
 }
 
 /// The key is built from the fixed hex alphabet only, as a raw 256-bit blob
