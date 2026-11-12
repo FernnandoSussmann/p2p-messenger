@@ -16,7 +16,7 @@ only once they carry real code — no empty stubs or placeholder modules.
 | Crate      | Status  | Responsibility                                               |
 | ---------- | ------- | ------------------------------------------------------------ |
 | `protocol` | present | Shared serde wire types (`Envelope`, `Payload`, …) + version |
-| `core`     | present | UI-agnostic logic by slices: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence) and `contacts` (contact book, trust, interim store) and `messaging` (encrypted message store; more to come) |
+| `core`     | present | UI-agnostic logic by slices: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence) and `contacts` (contact book, trust, interim store) and `messaging` (encrypted message store and delivery engine) |
 | `app`      | present | Thin Tauri v2 + Svelte shell over `core`                     |
 | `headless` | present | Test-only headless node + file keyring for Level-3 simulation; never shipped, never used by `app` |
 

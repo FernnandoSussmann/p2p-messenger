@@ -15,6 +15,7 @@ mod service;
 mod settings;
 mod ticket;
 
+pub(crate) use display_name::{is_bidi_control, is_disallowed_control, is_invisible_break};
 pub use display_name::{validate_display_name, DisplayName, DisplayNameError};
 pub use keychain::{KeychainError, KeychainStore, OsKeychain, APP_KEYCHAIN_SERVICE};
 pub use marker::{read_marker, write_marker, AccountId, MarkerError};

@@ -27,7 +27,7 @@ Cargo workspace built from vertical feature slices.
 Notes:
 - The package name `core` shadows std `core`; dependents import it with `package = "core"`.
 - Shared dependency versions live in the root `Cargo.toml` `[workspace.dependencies]`; member crates use `dep.workspace = true`.
-- `core` has a `test-support` feature exposing test doubles (e.g. `identity::testing`, `discovery::testing`, `contacts::testing`: `MemoryContactStore`, `FailingContactStore`, `RecordingHistoryEraser`, `BookCell`; `messaging::testing`: `MemoryMessageStore`, `FailingMessageStore`).
+- `core` has a `test-support` feature exposing test doubles (e.g. `identity::testing`, `discovery::testing`, `contacts::testing`: `MemoryContactStore`, `FailingContactStore`, `RecordingHistoryEraser`, `BookCell`; `messaging::testing`: `MemoryMessageStore`, `FailingMessageStore`, `ChatPeer`, `Faults`, `send_raw_frame`). Discovery exposes authorized channels to other slices only through `ChannelHandler`; messaging never dials.
 - Messages live in the SQLCipher `messenger.db` (DD-05 seam); never write bodies anywhere else.
 - Contacts are the single trust store (`ContactBook` implements `discovery::KnownPeers`); until DD-05 they live in plaintext `contacts.json`.
 
@@ -71,7 +71,7 @@ fix the failure instead.
 
 ## Testing
 
-- Rust unit and integration tests: `core/tests/`, plus `#[cfg(test)]` modules; app-shell flow tests live in `app/src-tauri/` (e.g. `first_run_flow_end_to_end`, `ticket_connect_accept_flow_end_to_end`, `tests/pre_commit_hook.rs`). Level-1 two-node tests (real iroh endpoints on loopback, plus a relay-only canary capture) live in `core/tests/discovery_*.rs`.
+- Rust unit and integration tests: `core/tests/`, plus `#[cfg(test)]` modules; app-shell flow tests live in `app/src-tauri/` (e.g. `first_run_flow_end_to_end`, `ticket_connect_accept_flow_end_to_end`, `tests/pre_commit_hook.rs`). Level-1 two-node tests (real iroh endpoints on loopback, plus a relay-only canary capture) live in `core/tests/discovery_*.rs`; the Level-1 messaging engine tests live in `core/tests/messaging_*.rs`.
 - Frontend component tests: `app/src/**/*.test.ts`.
 - No Tauri WebDriver is available here, so GUI flows are covered at command-invoke and component level, plus the manual checklist in `README.md`. If you change the pre-commit hook, verify it by staging a file under `app/` containing a secret-looking identifier and confirming the commit is rejected.
 - Keychain-dependent tests should use the in-memory test doubles, not the real OS keychain.

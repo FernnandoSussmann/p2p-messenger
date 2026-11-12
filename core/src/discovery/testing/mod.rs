@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use iroh::address_lookup::{
@@ -14,8 +14,9 @@ use iroh::endpoint::{presets, Connection};
 use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey, Watcher};
 use protocol::ALPN;
 use tempfile::TempDir;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, Notify};
 
+use crate::discovery::channel::{Channel, ChannelHandler};
 use crate::discovery::events::NetEvent;
 use crate::discovery::flood::GateLimits;
 use crate::discovery::hello::encode_hello;
@@ -513,6 +514,89 @@ async fn start(
         tickets,
         options,
         wrapper,
+    }
+}
+
+#[derive(Default)]
+struct Recorded {
+    seen: Vec<(NodeId, usize)>,
+    channels: Vec<Channel>,
+    queried: Vec<bool>,
+}
+
+/// A [`ChannelHandler`] that records every delivery and keeps the channels.
+/// [`RecordingChannelHandler::querying`] also calls `Node::channel` from inside
+/// `on_channel`, which proves the node never calls the handler under a lock.
+pub struct RecordingChannelHandler {
+    node: Option<Weak<Node>>,
+    recorded: Mutex<Recorded>,
+    changed: Notify,
+}
+
+impl RecordingChannelHandler {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            node: None,
+            recorded: Mutex::default(),
+            changed: Notify::new(),
+        })
+    }
+
+    pub fn querying(node: &Arc<Node>) -> Arc<Self> {
+        Arc::new(Self {
+            node: Some(Arc::downgrade(node)),
+            recorded: Mutex::default(),
+            changed: Notify::new(),
+        })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Recorded> {
+        self.recorded.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Every `(peer, stable_id)` delivered, in order.
+    pub fn seen(&self) -> Vec<(NodeId, usize)> {
+        self.lock().seen.clone()
+    }
+
+    pub fn channels(&self) -> Vec<Channel> {
+        self.lock().channels.clone()
+    }
+
+    /// For each delivery, whether `Node::channel` returned that channel from
+    /// inside `on_channel` (querying handlers only).
+    pub fn queried(&self) -> Vec<bool> {
+        self.lock().queried.clone()
+    }
+
+    /// The first channel delivered for `peer`, waiting up to `within`.
+    pub async fn wait_for(&self, peer: &NodeId, within: Duration) -> Option<Channel> {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            let changed = self.changed.notified();
+            if let Some(found) = self.lock().channels.iter().find(|c| c.peer() == *peer) {
+                return Some(found.clone());
+            }
+            if tokio::time::timeout_at(deadline, changed).await.is_err() {
+                return None;
+            }
+        }
+    }
+}
+
+impl ChannelHandler for RecordingChannelHandler {
+    fn on_channel(&self, channel: Channel) {
+        let queried = self.node.as_ref().map(|weak| {
+            weak.upgrade()
+                .and_then(|node| node.channel(&channel.peer()))
+                .is_some_and(|c| c.stable_id() == channel.stable_id())
+        });
+        let mut rec = self.lock();
+        rec.seen.push((channel.peer(), channel.stable_id()));
+        rec.queried.extend(queried);
+        rec.channels.push(channel);
+        drop(rec);
+        self.changed.notify_waiters();
     }
 }
 
