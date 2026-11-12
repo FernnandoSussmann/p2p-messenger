@@ -3,6 +3,7 @@
   import { contactsRename, contactsSetVerified, describeContactsError } from "../contacts";
   import { refreshContacts } from "../lib/contactsStore";
   import { lanPeers, connections } from "../lib/netStore";
+  import { openChat, unread } from "../lib/chatStore";
   import { netConnectTicket, describeNetError } from "../net";
   import TrustBadge from "./TrustBadge.svelte";
   import NodeIdLine from "./NodeIdLine.svelte";
@@ -78,6 +79,9 @@
   </div>
   <NodeIdLine nodeId={contact.node_id} />
   <div class="actions">
+    <button type="button" onclick={() => openChat(contact.node_id)}
+      >{($unread[contact.node_id] ?? 0) > 0 ? `Message (${$unread[contact.node_id]})` : "Message"}</button
+    >
     {#if lanTicket && !isConnected}
       <button type="button" disabled={busy} onclick={connect}>Connect</button>
     {/if}

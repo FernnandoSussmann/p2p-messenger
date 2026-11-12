@@ -12,12 +12,17 @@ vi.mock("../net", async (orig) => ({
   ...(await orig<typeof import("../net")>()),
   netConnectTicket: vi.fn(),
 }));
+vi.mock("../lib/chatStore", async () => {
+  const { writable } = await import("svelte/store");
+  return { openChat: vi.fn(), unread: writable<Record<string, number>>({}) };
+});
 vi.mock("../lib/contactsStore", () => ({ refreshContacts: vi.fn(async () => {}) }));
 
 import ContactRow from "./ContactRow.svelte";
 import { contactsRename, contactsSetVerified, type ContactDto } from "../contacts";
 import { netConnectTicket } from "../net";
 import { lanPeers, connections } from "../lib/netStore";
+import { openChat, unread } from "../lib/chatStore";
 
 const ID = "a".repeat(64);
 const mk = (o: Partial<ContactDto> = {}): ContactDto => ({
@@ -37,6 +42,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   lanPeers.set([]);
   connections.set({});
+  unread.set({});
 });
 
 describe("ContactRow", () => {
@@ -126,5 +132,17 @@ describe("ContactRow", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Mark unverified" }));
     await waitFor(() => expect(contactsSetVerified).toHaveBeenCalledWith(ID, false));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("message_button_opens_chat", async () => {
+    show();
+    await fireEvent.click(screen.getByRole("button", { name: "Message" }));
+    expect(openChat).toHaveBeenCalledWith(ID);
+  });
+
+  it("message_button_shows_unread", () => {
+    unread.set({ [ID]: 2 });
+    show();
+    expect(screen.getByRole("button", { name: "Message (2)" })).toBeTruthy();
   });
 });
