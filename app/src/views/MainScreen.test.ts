@@ -42,12 +42,28 @@ vi.mock("../lib/contactsStore", async () => {
     startContacts: vi.fn(async () => unlistenContacts),
   };
 });
+const unlistenChat = vi.fn();
+vi.mock("../lib/chatStore", async () => {
+  const { writable } = await import("svelte/store");
+  return {
+    activeChat: writable<string | null>(null),
+    closeChat: vi.fn(),
+    startChatEvents: vi.fn(async () => unlistenChat),
+    conversation: writable(null),
+    unread: writable({}),
+    openChat: vi.fn(),
+    loadOlder: vi.fn(),
+    sendMessage: vi.fn(),
+    resendMessage: vi.fn(),
+  };
+});
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 
 import MainScreen from "./MainScreen.svelte";
 import { activeTab } from "../lib/router";
 import { incomingRequests, connections } from "../lib/netStore";
 import { startContacts } from "../lib/contactsStore";
+import { activeChat, closeChat, startChatEvents } from "../lib/chatStore";
 import { identityMyInfo } from "../identity";
 import { netMyTicket, netPendingIncoming } from "../net";
 
@@ -55,6 +71,9 @@ afterEach(cleanup);
 beforeEach(() => {
   unlisten.mockClear();
   unlistenContacts.mockClear();
+  unlistenChat.mockClear();
+  vi.mocked(closeChat).mockClear();
+  activeChat.set(null);
   activeTab.set("contacts");
   namingQueue.set([]);
   incomingRequests.set([]);
@@ -120,5 +139,27 @@ describe("MainScreen", () => {
     await waitFor(() => expect(netPendingIncoming).toHaveBeenCalled());
     unmount();
     await waitFor(() => expect(unlisten.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("active_chat_replaces_tab_panel", async () => {
+    activeChat.set("peer-1");
+    render(MainScreen);
+    expect(await screen.findByRole("button", { name: "Back" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Contacts" })).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(closeChat).toHaveBeenCalled();
+  });
+
+  it("tab_click_closes_chat", async () => {
+    render(MainScreen);
+    await fireEvent.click(screen.getByRole("tab", { name: "Network" }));
+    expect(closeChat).toHaveBeenCalled();
+  });
+
+  it("chat_events_started_and_unlistened", async () => {
+    const { unmount } = render(MainScreen);
+    await waitFor(() => expect(startChatEvents).toHaveBeenCalled());
+    unmount();
+    await waitFor(() => expect(unlistenChat).toHaveBeenCalled());
   });
 });
