@@ -14,5 +14,6 @@
 pub mod contacts;
 pub mod discovery;
 pub mod identity;
+pub mod logging;
 pub mod messaging;
 pub mod storage;
