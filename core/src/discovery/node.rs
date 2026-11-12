@@ -19,6 +19,7 @@ use protocol::{ALPN, MAX_HELLO_BYTES};
 use tokio::sync::{broadcast, oneshot};
 use tokio::time::{sleep, timeout};
 
+use super::channel::{Channel, ChannelHandler};
 use super::events::{ConnectionState, Direction, FailureReason, IncomingRequest, NetEvent};
 use super::flood::{Admission, FloodGuard, GateLimits};
 use super::hello::{decode_hello, encode_hello};
@@ -262,7 +263,7 @@ struct State {
     authorized: HashMap<NodeId, Authorized>,
 }
 
-struct Inner {
+pub(super) struct Inner {
     endpoint: Endpoint,
     node_id: NodeId,
     account: AccountId,
@@ -277,6 +278,7 @@ struct Inner {
     /// Whether our LAN record is published. Held while it changes.
     presence: Mutex<bool>,
     state: Mutex<State>,
+    channel_handler: Mutex<Option<Arc<dyn ChannelHandler>>>,
     closing: AtomicBool,
     runtime: tokio::runtime::Handle,
 }
@@ -284,6 +286,21 @@ struct Inner {
 impl Inner {
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn handler(&self) -> MutexGuard<'_, Option<Arc<dyn ChannelHandler>>> {
+        self.channel_handler
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(super) fn is_current_channel(&self, peer: &NodeId, stable_id: usize) -> bool {
+        !self.closing.load(Ordering::SeqCst)
+            && self
+                .state()
+                .authorized
+                .get(peer)
+                .is_some_and(|a| a.stable_id == stable_id)
     }
 
     fn emit(&self, event: NetEvent) {
@@ -405,6 +422,7 @@ impl Node {
                 pending: HashMap::new(),
                 authorized: HashMap::new(),
             }),
+            channel_handler: Mutex::new(None),
             closing: AtomicBool::new(false),
             runtime: tokio::runtime::Handle::current(),
         });
@@ -414,6 +432,35 @@ impl Node {
         inner.runtime.spawn(lan_loop(inner.clone(), lan_events));
         tracing::debug!(node = %node_id.fmt_short(), "node started");
         Ok(Node { inner })
+    }
+
+    pub fn account(&self) -> AccountId {
+        self.inner.account
+    }
+
+    /// The current authorized channel to `peer`, if any.
+    pub fn channel(&self, peer: &NodeId) -> Option<Channel> {
+        let conn = self.inner.state().authorized.get(peer)?.conn.clone();
+        Some(Channel::new(*peer, conn, &self.inner))
+    }
+
+    /// Registers the single channel handler and replays the currently
+    /// authorized channels to it. The handler is never called under a lock.
+    pub fn set_channel_handler(&self, handler: Arc<dyn ChannelHandler>) {
+        if self.inner.closing.load(Ordering::SeqCst) {
+            return;
+        }
+        *self.inner.handler() = Some(handler.clone());
+        let channels: Vec<Channel> = self
+            .inner
+            .state()
+            .authorized
+            .iter()
+            .map(|(peer, a)| Channel::new(*peer, a.conn.clone(), &self.inner))
+            .collect();
+        for channel in channels {
+            handler.on_channel(channel);
+        }
     }
 
     pub fn node_id(&self) -> NodeId {
@@ -643,6 +690,7 @@ impl Drop for Node {
 impl Inner {
     async fn close(&self) {
         self.closing.store(true, Ordering::SeqCst);
+        *self.handler() = None;
         self.tickets.detach();
         if let Err(e) = self.lan.set_advertise(false, None) {
             tracing::debug!(error = %e, "could not withdraw the LAN record");
@@ -898,6 +946,10 @@ fn authorize(
         close(&old.conn, CLOSE_REPLACED);
     }
     inner.emit_connected(peer, direction, name.clone());
+    let handler = inner.handler().clone();
+    if let Some(handler) = handler {
+        handler.on_channel(Channel::new(peer, conn.clone(), inner));
+    }
 
     let inner = inner.clone();
     let observer = inner.clone();
