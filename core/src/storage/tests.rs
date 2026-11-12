@@ -124,7 +124,7 @@ fn garbage_file_is_reported_and_left_in_place() {
 }
 
 #[test]
-fn damaged_page_fails_the_integrity_check_and_file_is_untouched() {
+fn mid_file_corruption_is_detected() {
     let dir = tempfile::tempdir().unwrap();
     let k = key();
     {
