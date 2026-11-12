@@ -207,3 +207,19 @@ fn import_does_not_reenter_storage() {
     assert_eq!(counting.loads.load(Ordering::SeqCst), 1);
     assert!(!dir.path().join("settings.json").exists());
 }
+
+#[test]
+fn leftover_tmp_is_removed_when_the_main_file_is_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open_db(&dir, &DbKey::from_bytes(rand::random()));
+    for f in ["settings.json", "contacts.json", "known_peers.json"] {
+        fs::write(dir.path().join(format!("{f}.tmp")), b"secret").unwrap();
+    }
+    assert_eq!(
+        import_all(&db, dir.path()).unwrap(),
+        ImportReport::default()
+    );
+    for f in ["settings.json", "contacts.json", "known_peers.json"] {
+        assert!(!dir.path().join(format!("{f}.tmp")).exists(), "{f}");
+    }
+}

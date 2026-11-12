@@ -238,18 +238,40 @@ impl Storage {
     /// While the marker is still absent, finishes a deferred discard once the
     /// extra handle is gone; while it is alive, fails with an unlatched `Io`.
     fn retry_pending_discard(&self, state: &mut State) -> Result<(), StorageError> {
-        let Some((_, weak)) = &state.pending_discard else {
+        let Some((account, weak)) = &state.pending_discard else {
             return Ok(());
         };
-        let alive = weak.strong_count() > 0;
-        if !matches!(read_marker(&self.data_dir), Ok(None)) {
+        let account = *account;
+        if !matches!(read_marker(&self.data_dir), Ok(None)) || state.last_created != Some(account) {
             state.pending_discard = None;
-            Ok(())
-        } else if alive {
-            Err(StorageError::Io)
-        } else {
-            self.delete_files(state)
+            return Ok(());
         }
+        if weak.strong_count() > 0 {
+            return Err(StorageError::Io);
+        }
+        if !self.still_discardable(&account) {
+            state.pending_discard = None;
+            return Ok(());
+        }
+        self.delete_files(state)
+    }
+
+    /// Reopens the file without creating it and re-checks for user data.
+    /// Anything unexpected keeps the file.
+    fn still_discardable(&self, account: &AccountId) -> bool {
+        let Ok(key) = self.keys.db_key(account) else {
+            return false;
+        };
+        let Ok(db) = Database::open_reporting(
+            &self.data_dir.join(DB_FILE),
+            &key,
+            MIGRATIONS,
+            Create::Forbidden,
+            &mut false,
+        ) else {
+            return false;
+        };
+        matches!(holds_user_data(&db, account), Ok(false))
     }
 
     /// Creation is allowed only while provisioning (no marker yet) or while

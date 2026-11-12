@@ -134,7 +134,10 @@ fn import_one(
     };
     if !seen {
         let parsed = match parse(kind, data_dir) {
-            Ok(None) => return Ok(()),
+            Ok(None) => {
+                remove_leftover_tmp(data_dir, kind, report);
+                return Ok(());
+            }
             Ok(Some(parsed)) => parsed,
             Err(e) if kind.fatal() => {
                 tracing::warn!(error = ?e, kind = kind.label(), "legacy data unreadable");
@@ -235,12 +238,23 @@ fn now_ms() -> i64 {
 /// Runs with no database guard held. A failure is counted and retried at the
 /// next start; the `legacy_imports` row keeps the file from being re-imported.
 fn remove_after_commit(data_dir: &Path, kind: Kind, report: &mut ImportReport) {
-    let path = data_dir.join(kind.file());
-    let mut tmp = path.clone().into_os_string();
-    tmp.push(".tmp");
-    let mut pending = remove_plaintext(&path).is_err();
-    pending |= remove_plaintext(Path::new(&tmp)).is_err();
+    let mut pending = remove_plaintext(&data_dir.join(kind.file())).is_err();
+    pending |= remove_tmp(data_dir, kind).is_err();
     if pending {
+        tracing::warn!(kind = kind.label(), "legacy plaintext file not removed");
+        report.removals_pending += 1;
+    }
+}
+
+fn remove_tmp(data_dir: &Path, kind: Kind) -> Result<(), ()> {
+    let mut tmp = data_dir.join(kind.file()).into_os_string();
+    tmp.push(".tmp");
+    remove_plaintext(Path::new(&tmp))
+}
+
+/// The main file is absent: a leftover `.tmp` is still plaintext.
+fn remove_leftover_tmp(data_dir: &Path, kind: Kind, report: &mut ImportReport) {
+    if remove_tmp(data_dir, kind).is_err() {
         tracing::warn!(kind = kind.label(), "legacy plaintext file not removed");
         report.removals_pending += 1;
     }

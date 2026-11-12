@@ -150,3 +150,32 @@ fn a_provisioned_account_is_never_discarded() {
     assert_eq!(storage.status(), StorageStatus::NotOpened);
     storage.database(&provisioned.account_id).unwrap();
 }
+
+#[test]
+fn deferred_discard_keeps_file_when_user_data_appears() {
+    let (dir, keychain, storage, _) = setup();
+    let account = AccountId::new();
+    with_key(&keychain, &account);
+    let extra = storage.database_creating(&account).unwrap();
+    storage.discard_provisioning(&account).unwrap();
+
+    let contact = Contact {
+        node_id: iroh::SecretKey::generate().public(),
+        nickname: Nickname::parse("Bob").unwrap(),
+        self_name: None,
+        trust: TrustState::Unverified,
+        added_at_ms: 1,
+        last_seen_ms: None,
+    };
+    {
+        let mut conn = extra.conn().unwrap();
+        let tx = conn.transaction().unwrap();
+        crate::contacts::insert_if_absent_tx(&tx, &account, &contact).unwrap();
+        tx.commit().unwrap();
+    }
+    drop(extra);
+
+    let reopened = storage.database(&account).unwrap();
+    assert!(db_path(&dir).exists());
+    drop(reopened);
+}
