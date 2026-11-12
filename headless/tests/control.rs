@@ -278,6 +278,10 @@ fn start_pair(tmp: &Path) -> (Headless, Headless) {
 }
 
 fn connect_and_accept(a: &Headless, b: &Headless) {
+    connect_and_accept_as(a, b, &[]);
+}
+
+fn connect_and_accept_as(a: &Headless, b: &Headless, nickname: &[&str]) {
     let ticket = a.ctl(&["ticket"])["ticket"].as_str().unwrap().to_owned();
     let a_id = a.ctl(&["node-id"])["node_id"].as_str().unwrap().to_owned();
     let b_id = b.ctl(&["node-id"])["node_id"].as_str().unwrap().to_owned();
@@ -285,7 +289,9 @@ fn connect_and_accept(a: &Headless, b: &Headless) {
 
     let req = a.ctl(&["wait", "incoming_request", "--timeout-secs", "30"]);
     assert_eq!(req["payload"]["node_id"], b_id.as_str());
-    assert_eq!(a.ctl(&["respond", &b_id, "accept"])["ok"], true);
+    let mut respond = vec!["respond", b_id.as_str(), "accept"];
+    respond.extend(nickname);
+    assert_eq!(a.ctl(&respond)["ok"], true);
     for (node, peer) in [(a, &b_id), (b, &a_id)] {
         let up = node.ctl(&[
             "wait",
@@ -300,6 +306,54 @@ fn connect_and_accept(a: &Headless, b: &Headless) {
         assert_eq!(up["ok"], true, "{up}");
     }
     assert_eq!(a.ctl(&["connected"])["peers"], json!([b_id]));
+}
+
+fn nicknames(node: &Headless) -> Vec<String> {
+    let doc: Value =
+        serde_json::from_slice(&std::fs::read(node.dir.join("contacts.json")).unwrap()).unwrap();
+    doc["accounts"]
+        .as_object()
+        .unwrap()
+        .values()
+        .flat_map(|peers| peers.as_object().unwrap().values())
+        .map(|c| c["nickname"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn respond_accept_with_and_without_nickname() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, b) = start_pair(tmp.path());
+    connect_and_accept_as(&a, &b, &["Bobby"]);
+    assert_eq!(nicknames(&a), ["Bobby"]);
+    assert_eq!(nicknames(&b), ["Alice"]);
+    a.stop();
+    b.stop();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, b) = start_pair(tmp.path());
+    connect_and_accept(&a, &b);
+    assert_eq!(nicknames(&a), ["Bob"]);
+
+    let ticket = a.ctl(&["ticket"])["ticket"].as_str().unwrap().to_owned();
+    let c = Headless::start(&tmp.path().join("c"), "Carol");
+    let c_id = c.ctl(&["node-id"])["node_id"].as_str().unwrap().to_owned();
+    c.ctl(&["connect", &ticket]);
+    a.ctl(&[
+        "wait",
+        "incoming_request",
+        "--node",
+        &c_id,
+        "--timeout-secs",
+        "30",
+    ]);
+    let bad = a.ctl(&["respond", &c_id, "accept", "a\u{200B}b"]);
+    assert_eq!(bad["error"], "InvalidNickname");
+    assert_eq!(nicknames(&a), ["Bob"]);
+    assert_eq!(a.ctl(&["respond", &c_id, "decline"])["ok"], true);
+    a.stop();
+    b.stop();
+    c.stop();
 }
 
 #[test]
@@ -318,6 +372,7 @@ fn stdout_event_names_are_the_dd02_names() {
             node_id: id,
             direction: Direction::Inbound,
             state: ConnectionState::Connected,
+            display_name: None,
         },
         NetEvent::MyTicketChanged,
         NetEvent::LanPeersChanged(Vec::new()),

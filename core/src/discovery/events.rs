@@ -13,6 +13,9 @@ pub enum NetEvent {
         node_id: NodeId,
         direction: Direction,
         state: ConnectionState,
+        /// Hello name of the peer: `Some` only on `Connected` with a valid
+        /// name. Advisory.
+        display_name: Option<DisplayName>,
     },
     /// The live ticket changed; consumers re-fetch it.
     MyTicketChanged,

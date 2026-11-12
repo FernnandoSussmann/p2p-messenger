@@ -1,29 +1,56 @@
 <script lang="ts">
   import { incomingRequests, dropIncoming } from "../lib/netStore";
-  import { netRespondIncoming } from "../net";
+  import { describeNetError, netRespondIncoming } from "../net";
+  import { refreshContacts } from "../lib/contactsStore";
+  import NicknameForm from "./NicknameForm.svelte";
+  import TrustBadge from "./TrustBadge.svelte";
 
   const first = $derived($incomingRequests[0]);
   const more = $derived($incomingRequests.length - 1);
+  let busy = $state(false);
+  let error = $state<string | null>(null);
 
-  async function respond(nodeId: string, accept: boolean) {
+  $effect(() => {
+    void first?.node_id;
+    error = null;
+  });
+
+  async function respond(nodeId: string, accept: boolean, nickname?: string) {
+    busy = true;
+    error = null;
     try {
-      await netRespondIncoming(nodeId, accept);
+      if (accept) {
+        await netRespondIncoming(nodeId, true, nickname);
+        await refreshContacts();
+      } else await netRespondIncoming(nodeId, false);
     } catch (e) {
-      if ((e as { type?: string } | undefined)?.type !== "NoSuchRequest") return;
+      const type = (e as { type?: string } | undefined)?.type;
+      busy = false;
+      if (type !== "NoSuchRequest") {
+        error = describeNetError(e);
+        return;
+      }
     }
+    busy = false;
     dropIncoming(nodeId);
   }
 </script>
 
 {#if first}
   <div role="dialog" aria-label="Incoming connection request" data-testid="incoming-prompt">
-    <p><strong data-testid="unverified-badge">Unverified</strong> — someone is asking to connect</p>
-    <p>
-      {#if first.display_name}calls themselves “<span data-testid="peer-name">{first.display_name}</span>”{:else}(no name){/if}
-    </p>
+    <p><TrustBadge verified={false} /> — someone is asking to connect</p>
     <code data-testid="peer-node-id" style="word-break: break-all">{first.node_id}</code>
     {#if more > 0}<p>+{more} more</p>{/if}
-    <button type="button" onclick={() => respond(first.node_id, true)}>Accept</button>
-    <button type="button" onclick={() => respond(first.node_id, false)}>Decline</button>
+    {#key first.node_id}
+      <NicknameForm
+        initial={first.suggested_nickname}
+        selfName={first.display_name}
+        submitLabel="Accept and add contact"
+        {busy}
+        {error}
+        onSubmit={(nickname) => respond(first.node_id, true, nickname)}
+      />
+    {/key}
+    <button type="button" disabled={busy} onclick={() => respond(first.node_id, false)}>Decline</button>
   </div>
 {/if}

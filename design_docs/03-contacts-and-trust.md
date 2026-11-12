@@ -1,7 +1,15 @@
 # DD-03 — Contacts & Trust Model
 
 **Feature slice:** `core::contacts` + `app` contact list / add-contact UX
-**Status:** Draft (v1)
+**Status:** Implemented (v1). Documented deviations / user decisions:
+interim plaintext contact store until DD-05; history-deletion seam with a
+no-op eraser until DD-04/DD-05; NodeId copy by selection only (clipboard
+rule, user-accepted); contact list shows only the local nickname (self-asserted
+name kept for a future contact-info screen); DD-01 name validation tightened
+to reject invisible format characters except inside well-formed emoji ZWJ/tag
+sequences; dialed peers auto-added as unverified with a default nickname, and
+the Accept and naming prompts prefilled with that default; "Open chat"
+deferred to DD-04.
 **Related:** [DD-02 Transport & Discovery](02-transport-discovery-and-connection.md),
 [DD-04 Messaging](04-messaging-and-delivery.md),
 [DD-05 Storage & Logging](05-encrypted-storage-and-logging.md)
@@ -132,7 +140,7 @@ shown for context, and the user decides what to actually call them.
   applicable.
 - Discovered-but-not-added LAN peers may appear in a separate "on this network"
   affordance (owned visually here, data from DD-02), always badged unverified.
-- Row actions: open chat (DD-04), edit nickname, mark verified, remove contact.
+- Row actions: open chat (DD-04; deferred to DD-04, deviation O: no placeholder button), edit nickname, mark verified, remove contact.
 - Removing a contact opens a confirmation that includes an explicit, opt-in
   **"also delete our message history"** choice (default **off**, so the
   destructive part is never the accidental default). The two effects are
@@ -217,18 +225,22 @@ shown for context, and the user decides what to actually call them.
 
 ## Definition of done
 
-- [ ] Contacts persist keyed by `(account_id, NodeId)` in the encrypted DB.
-- [ ] A peer can be added from a LAN discovery, a ticket connection, and an
+- [x] Contacts persist keyed by `(account_id, NodeId)` in the encrypted DB.
+      (Deviation S: interim plaintext `contacts.json` behind the `ContactStore`
+      trait; DD-05 replaces it with the encrypted table.)
+- [x] A peer can be added from a LAN discovery, a ticket connection, and an
       inbound Accept — all converging on the same unverified contact record.
-- [ ] Local nickname is editable and fully independent of the peer's
+- [x] Local nickname is editable and fully independent of the peer's
       self-asserted name.
-- [ ] Unverified/verified states exist; verify is an explicit, honestly-labeled
+- [x] Unverified/verified states exist; verify is an explicit, honestly-labeled
       user attestation; the badge can't be spoofed by peer-controlled data.
-- [ ] Contact rows render name-bold / NodeId-gray-beneath with an unverified
-      badge where applicable.
-- [ ] `contacts_is_known` backs DD-02's trust gate correctly.
-- [ ] Removal reverts trust and its confirmation offers an opt-in
+- [x] Contact rows render name-bold / NodeId-gray-beneath with an unverified
+      badge where applicable. (Rows show only the local nickname, deviation B;
+      the "open chat" row action is deferred to DD-04, deviation O.)
+- [x] `contacts_is_known` backs DD-02's trust gate correctly.
+- [x] Removal reverts trust and its confirmation offers an opt-in
       (default-off) "also delete message history" option that delegates to DD-05;
-      both outcomes are clearly surfaced before confirming.
-- [ ] All tests above pass; `core::contacts` joins the workspace with real
+      both outcomes are clearly surfaced before confirming. (Deviation H: the
+      `HistoryEraser` seam has a no-op production eraser until DD-04/DD-05.)
+- [x] All tests above pass; `core::contacts` joins the workspace with real
       content only.

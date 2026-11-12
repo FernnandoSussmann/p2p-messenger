@@ -10,10 +10,11 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use iroh::RelayUrl;
+use messenger_core::contacts::{accept_incoming, AcceptError, ContactError};
 use messenger_core::discovery::{
-    event_json, ConnectError, FileKnownPeers, IncomingRequestDto, KnownPeers, LanPeerDto,
-    LiveTicketProvider, MyTicketDto, NetEvent, Node, NodeConfig, NodeDeps, PresenceDto,
-    PresenceError, RelayChoice, RespondError, StartError,
+    event_json, ConnectError, IncomingRequestDto, KnownPeers, LanPeerDto, LiveTicketProvider,
+    MyTicketDto, NetEvent, Node, NodeConfig, NodeDeps, PresenceDto, PresenceError, RelayChoice,
+    RespondError, StartError,
 };
 use messenger_core::identity::{
     ticket_to_qr_svg, validate_relay_url, AccountId, FileSettingsStore, IdentityService,
@@ -25,7 +26,8 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::identity_cmd::AppIdentity;
+use crate::contacts_cmd::ContactsState;
+use crate::identity_cmd::{AppIdentity, DisplayNameKind};
 
 const TICKET_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -38,7 +40,31 @@ pub enum NetCmdError {
     SelfDial,
     NoSuchRequest,
     SettingsUnavailable,
+    InvalidNickname { kind: DisplayNameKind },
+    ContactsFull,
+    ContactsUnavailable,
     Internal,
+}
+
+impl From<AcceptError> for NetCmdError {
+    fn from(err: AcceptError) -> Self {
+        match err {
+            AcceptError::InvalidNickname(e)
+            | AcceptError::Contacts(ContactError::InvalidNickname(e)) => {
+                Self::InvalidNickname { kind: e.into() }
+            }
+            AcceptError::NoSuchRequest | AcceptError::Contacts(ContactError::NotFound) => {
+                Self::NoSuchRequest
+            }
+            AcceptError::Contacts(ContactError::Full) => Self::ContactsFull,
+            AcceptError::Contacts(
+                ContactError::SelfContact
+                | ContactError::AlreadyExists
+                | ContactError::Unavailable
+                | ContactError::HistoryEraseFailed,
+            ) => Self::ContactsUnavailable,
+        }
+    }
 }
 
 impl From<ConnectError> for NetCmdError {
@@ -213,11 +239,32 @@ pub fn connect_ticket(state: &NetState, ticket: &str) -> Result<ConnectDto, NetC
     })
 }
 
-pub fn respond_incoming(state: &NetState, node_id: &str, accept: bool) -> Result<(), NetCmdError> {
+/// Decline answers the prompt only. Accept is "add contact": it persists an
+/// Unverified contact under the user's nickname, then answers the prompt.
+pub async fn respond_incoming(
+    state: &NetState,
+    contacts: &ContactsState,
+    node_id: &str,
+    accept: bool,
+    nickname: Option<String>,
+) -> Result<(), NetCmdError> {
     let node = state.node()?;
     let peer = NodeId::from_str(node_id).map_err(|_| NetCmdError::NoSuchRequest)?;
-    node.respond_incoming(&peer, accept)?;
-    Ok(())
+    if !accept {
+        node.respond_incoming(&peer, false)?;
+        return Ok(());
+    }
+    let nickname = nickname.ok_or(NetCmdError::InvalidNickname {
+        kind: DisplayNameKind::Empty,
+    })?;
+    let book = contacts.book().ok_or(NetCmdError::ContactsUnavailable)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        accept_incoming(&book, node.as_ref(), &peer, &nickname)
+    })
+    .await
+    .map_err(|_| NetCmdError::Internal)?
+    .map(|_| ())
+    .map_err(NetCmdError::from)
 }
 
 pub fn pending_incoming(state: &NetState) -> Result<Vec<IncomingRequestDto>, NetCmdError> {
@@ -274,12 +321,13 @@ pub fn forward(ev: &NetEvent, emit: impl Fn(&str, Value)) {
 
 /// Everything `ensure_started` needs besides the identity service.
 pub struct NetBoot {
-    pub data_dir: std::path::PathBuf,
     pub settings: Arc<FileSettingsStore>,
     pub tickets: LiveTicketProvider,
 }
 
-/// Starts the node once if an identity exists. The relay override is applied
+/// Starts the node once if an identity exists. Contacts are bound as soon as
+/// the identity is read, before and independently of the start, so a relay or
+/// bind failure still leaves them usable. The relay override is applied
 /// here, after the account exists and before `Node::start`, so an override
 /// never lands without an `account_id` to key it. A stored relay that cannot
 /// be read or saved refuses the start rather than falling back to the default
@@ -289,11 +337,17 @@ pub async fn start_if_present<K: KeychainStore, S: SettingsStore, T: TicketProvi
     identity: &IdentityService<K, S, T>,
     settings: Arc<dyn SettingsStore + Send + Sync>,
     tickets: LiveTicketProvider,
-    known: impl FnOnce(AccountId) -> Arc<dyn KnownPeers>,
+    contacts: &ContactsState,
     mut config: NodeConfig,
 ) -> bool {
-    let account = match identity.status() {
-        IdentityStatus::Present { account_id, .. } => account_id,
+    let (account, known) = match identity.status() {
+        IdentityStatus::Present {
+            account_id,
+            node_id,
+        } => (
+            account_id,
+            contacts.bind(account_id, node_id) as Arc<dyn KnownPeers>,
+        ),
         _ => return false,
     };
     let start = async {
@@ -309,7 +363,7 @@ pub async fn start_if_present<K: KeychainStore, S: SettingsStore, T: TicketProvi
         }
         let deps = NodeDeps {
             settings: Arc::clone(&settings),
-            known: known(account),
+            known,
             tickets,
         };
         Node::start(identity, deps, config).await
@@ -325,13 +379,13 @@ pub fn ensure_started(app: &AppHandle) {
         let state = app.state::<NetState>();
         let boot = app.state::<NetBoot>();
         let identity = app.state::<AppIdentity>();
-        let data_dir = boot.data_dir.clone();
+        let contacts = app.state::<Arc<ContactsState>>();
         let started = start_if_present(
             &state,
             &*identity,
             boot.settings.clone(),
             boot.tickets.clone(),
-            |account| Arc::new(FileKnownPeers::new(data_dir, account)),
+            &contacts,
             NodeConfig::desktop(),
         )
         .await;
@@ -370,10 +424,12 @@ pub async fn net_connect_ticket(
 #[tauri::command]
 pub async fn net_respond_incoming(
     state: State<'_, NetState>,
+    contacts: State<'_, Arc<ContactsState>>,
     node_id: String,
     accept: bool,
+    nickname: Option<String>,
 ) -> Result<(), NetCmdError> {
-    respond_incoming(&state, &node_id, accept)
+    respond_incoming(&state, &contacts, &node_id, accept, nickname).await
 }
 
 #[tauri::command]
@@ -407,87 +463,42 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
+    use messenger_core::contacts::testing::{MemoryContactStore, RecordingHistoryEraser};
+    use messenger_core::contacts::TrustState;
     use messenger_core::discovery::testing::{
-        next_event, spawn_test_node_with, spawn_test_node_wrapped, MemoryKnownPeers, MemoryLanBus,
-        SettingsWrapper, TestIdentity, TestOptions,
+        spawn_test_node_with, spawn_test_node_wrapped, MemoryLanBus, SettingsWrapper, TestIdentity,
+        TestOptions,
     };
     use messenger_core::discovery::{ConnectionState, Direction, FailureReason};
     use messenger_core::identity::testing::FakeKeychain;
     use messenger_core::identity::{
         DisplayName, IdentityService, KeychainStore, MemorySettingsStore, Ticket,
     };
-    use tokio::sync::broadcast::Receiver;
 
     use super::*;
     use crate::identity_cmd::{my_info, provision};
-    use crate::test_util::assert_forms_absent;
+    use crate::test_util::{
+        assert_forms_absent, events, expect, is_incoming, is_state, started, started_with,
+        ticket_of, Started, WAIT,
+    };
 
-    const WAIT: Duration = Duration::from_secs(10);
-
-    /// A started state plus the fixtures that must outlive it.
-    struct Started {
-        state: NetState,
-        known: Arc<MemoryKnownPeers>,
-        id: NodeId,
-        identity: TestIdentity,
-        keychain: Arc<FakeKeychain>,
-        _dir: tempfile::TempDir,
+    async fn accept(s: &Started, peer: &NodeId, nickname: &str) -> Result<(), NetCmdError> {
+        respond_incoming(
+            &s.state,
+            &s.contacts,
+            &peer.to_string(),
+            true,
+            Some(nickname.to_owned()),
+        )
+        .await
     }
 
-    async fn started_with(name: &str, options: TestOptions) -> Started {
-        let known = Arc::new(MemoryKnownPeers::new());
-        let rest = spawn_test_node_with(name, options.with_known(known.clone())).await;
-        let id = rest.id();
-        let state = NetState::default();
-        let node = rest.node;
-        assert!(state.ensure_started_with(async { Ok(node) }).await.unwrap());
-        Started {
-            state,
-            known,
-            id,
-            identity: rest.identity,
-            keychain: rest.keychain,
-            _dir: rest.dir,
-        }
+    async fn decline(s: &Started, peer: &NodeId) -> Result<(), NetCmdError> {
+        respond_incoming(&s.state, &s.contacts, &peer.to_string(), false, None).await
     }
 
-    async fn started(name: &str) -> Started {
-        started_with(name, TestOptions::default()).await
-    }
-
-    fn events(s: &Started) -> Receiver<NetEvent> {
-        s.state.node().unwrap().subscribe()
-    }
-
-    async fn expect(rx: &mut Receiver<NetEvent>, pred: impl Fn(&NetEvent) -> bool) -> NetEvent {
-        let deadline = tokio::time::Instant::now() + WAIT;
-        loop {
-            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-            match next_event(rx, left).await {
-                Some(ev) if pred(&ev) => return ev,
-                Some(_) => {}
-                None => panic!("timed out waiting for event"),
-            }
-        }
-    }
-
-    fn is_state(
-        peer: NodeId,
-        direction: Direction,
-        state: ConnectionState,
-    ) -> impl Fn(&NetEvent) -> bool {
-        move |ev| {
-            matches!(ev, NetEvent::ConnectionState { node_id, direction: d, state: s }
-                if *node_id == peer && *d == direction && *s == state)
-        }
-    }
-
-    fn is_incoming(ev: &NetEvent) -> bool {
-        matches!(ev, NetEvent::IncomingRequest(_))
-    }
-
-    async fn ticket_of(s: &Started) -> String {
-        my_ticket(&s.state).await.unwrap().ticket
+    fn book(s: &Started) -> Arc<messenger_core::contacts::ContactBook> {
+        s.contacts.book().expect("contacts are bound")
     }
 
     #[test]
@@ -498,12 +509,69 @@ mod tests {
             (NetCmdError::SelfDial, "SelfDial"),
             (NetCmdError::NoSuchRequest, "NoSuchRequest"),
             (NetCmdError::SettingsUnavailable, "SettingsUnavailable"),
+            (NetCmdError::ContactsFull, "ContactsFull"),
+            (NetCmdError::ContactsUnavailable, "ContactsUnavailable"),
             (NetCmdError::Internal, "Internal"),
         ] {
             assert_eq!(
                 serde_json::to_value(err).unwrap(),
                 serde_json::json!({ "type": tag })
             );
+        }
+    }
+
+    #[test]
+    fn invalid_nickname_error_carries_its_kind() {
+        let err = NetCmdError::InvalidNickname {
+            kind: DisplayNameKind::InvisibleCharacter,
+        };
+        assert_eq!(
+            serde_json::to_value(err).unwrap(),
+            serde_json::json!({ "type": "InvalidNickname", "kind": "InvisibleCharacter" })
+        );
+    }
+
+    #[test]
+    fn accept_maps_every_contact_error() {
+        use messenger_core::identity::DisplayNameError as D;
+        let kind = |k| NetCmdError::InvalidNickname { kind: k };
+        let cases = [
+            (
+                AcceptError::InvalidNickname(D::Empty),
+                kind(DisplayNameKind::Empty),
+            ),
+            (
+                AcceptError::Contacts(ContactError::InvalidNickname(D::BidiOverride)),
+                kind(DisplayNameKind::BidiOverride),
+            ),
+            (AcceptError::NoSuchRequest, NetCmdError::NoSuchRequest),
+            (
+                AcceptError::Contacts(ContactError::NotFound),
+                NetCmdError::NoSuchRequest,
+            ),
+            (
+                AcceptError::Contacts(ContactError::Full),
+                NetCmdError::ContactsFull,
+            ),
+            (
+                AcceptError::Contacts(ContactError::SelfContact),
+                NetCmdError::ContactsUnavailable,
+            ),
+            (
+                AcceptError::Contacts(ContactError::AlreadyExists),
+                NetCmdError::ContactsUnavailable,
+            ),
+            (
+                AcceptError::Contacts(ContactError::Unavailable),
+                NetCmdError::ContactsUnavailable,
+            ),
+            (
+                AcceptError::Contacts(ContactError::HistoryEraseFailed),
+                NetCmdError::ContactsUnavailable,
+            ),
+        ];
+        for (err, want) in cases {
+            assert_eq!(NetCmdError::from(err), want);
         }
     }
 
@@ -536,7 +604,11 @@ mod tests {
         let a = started("Alice").await;
         let b = started("Bob").await;
         assert_eq!(
-            respond_incoming(&a.state, &b.id.to_string(), true).unwrap_err(),
+            accept(&a, &b.id, "Bobby").await.unwrap_err(),
+            NetCmdError::NoSuchRequest
+        );
+        assert_eq!(
+            decline(&a, &b.id).await.unwrap_err(),
             NetCmdError::NoSuchRequest
         );
     }
@@ -545,10 +617,15 @@ mod tests {
     async fn malformed_node_id_is_no_such_request() {
         let a = started("Alice").await;
         for bad in ["", "not-a-node-id", "\u{202E}", &"f".repeat(4096)] {
-            assert_eq!(
-                respond_incoming(&a.state, bad, true).unwrap_err(),
-                NetCmdError::NoSuchRequest
-            );
+            for (accept, nickname) in [(true, Some("Bobby".to_owned())), (false, Some("x".into()))]
+            {
+                assert_eq!(
+                    respond_incoming(&a.state, &a.contacts, bad, accept, nickname)
+                        .await
+                        .unwrap_err(),
+                    NetCmdError::NoSuchRequest
+                );
+            }
         }
     }
 
@@ -566,7 +643,7 @@ mod tests {
         assert_eq!(req.node_id, b.id);
         assert_eq!(req.display_name.as_ref().map(|n| n.as_str()), Some("Bob"));
 
-        respond_incoming(&a.state, &b.id.to_string(), true).unwrap();
+        accept(&a, &b.id, "Bobby").await.unwrap();
         expect(
             &mut ea,
             is_state(b.id, Direction::Inbound, ConnectionState::Connected),
@@ -578,8 +655,14 @@ mod tests {
         )
         .await;
         assert!(pending_incoming(&a.state).unwrap().is_empty());
-        assert!(a.known.is_known(&b.id).unwrap());
-        assert!(b.known.is_known(&a.id).unwrap());
+        let theirs = book(&a).get(&b.id).unwrap().unwrap();
+        assert_eq!(theirs.nickname.as_str(), "Bobby");
+        assert_eq!(theirs.self_name.as_ref().map(|n| n.as_str()), Some("Bob"));
+        assert_eq!(theirs.trust, TrustState::Unverified);
+        let ours = book(&b).get(&a.id).unwrap().unwrap();
+        assert_eq!(ours.nickname.as_str(), "Alice");
+        assert_eq!(ours.trust, TrustState::Unverified);
+        assert!(a.history.calls().is_empty() && b.history.calls().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -595,8 +678,9 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].node_id, b.id.to_string());
         assert_eq!(pending[0].display_name.as_deref(), Some("Bob"));
+        assert_eq!(pending[0].suggested_nickname, "Bob");
 
-        respond_incoming(&a.state, &b.id.to_string(), false).unwrap();
+        decline(&a, &b.id).await.unwrap();
         assert!(pending_incoming(&a.state).unwrap().is_empty());
     }
 
@@ -630,8 +714,11 @@ mod tests {
             connect_ticket(&state, "x").unwrap_err(),
             NetCmdError::NotReady
         );
+        let contacts = started("Carol").await.contacts;
         assert_eq!(
-            respond_incoming(&state, "x", true).unwrap_err(),
+            respond_incoming(&state, &contacts, "x", true, None)
+                .await
+                .unwrap_err(),
             NetCmdError::NotReady
         );
         assert_eq!(pending_incoming(&state).unwrap_err(), NetCmdError::NotReady);
@@ -689,7 +776,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn dial_adds_known_only_after_hello_reply() {
+    async fn dial_remembers_peer_only_after_valid_reply() {
         let a = started("Alice").await;
         let b = started("Bob").await;
         let (mut ea, mut eb) = (events(&a), events(&b));
@@ -697,9 +784,9 @@ mod tests {
 
         connect_ticket(&b.state, &ticket).unwrap();
         expect(&mut ea, is_incoming).await;
-        assert!(!b.known.is_known(&a.id).unwrap());
+        assert!(book(&b).list().unwrap().is_empty());
 
-        respond_incoming(&a.state, &b.id.to_string(), false).unwrap();
+        decline(&a, &b.id).await.unwrap();
         expect(
             &mut eb,
             is_state(
@@ -709,19 +796,82 @@ mod tests {
             ),
         )
         .await;
-        assert!(b.known.is_empty());
-        assert!(a.known.is_empty());
+        assert!(book(&b).list().unwrap().is_empty());
+        assert!(book(&a).list().unwrap().is_empty());
 
         connect_ticket(&b.state, &ticket).unwrap();
         expect(&mut ea, is_incoming).await;
-        assert!(!b.known.is_known(&a.id).unwrap());
-        respond_incoming(&a.state, &b.id.to_string(), true).unwrap();
+        assert!(!book(&b).is_known(&a.id).unwrap());
+        accept(&a, &b.id, "Bobby").await.unwrap();
         expect(
             &mut eb,
             is_state(a.id, Direction::Outbound, ConnectionState::Connected),
         )
         .await;
-        assert!(b.known.is_known(&a.id).unwrap());
+        let remembered = book(&b).get(&a.id).unwrap().unwrap();
+        assert_eq!(remembered.nickname.as_str(), "Alice");
+        assert_eq!(remembered.trust, TrustState::Unverified);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn accept_requires_a_valid_nickname() {
+        let a = started("Alice").await;
+        let b = started("Bob").await;
+        let mut ea = events(&a);
+        connect_ticket(&b.state, &ticket_of(&a).await).unwrap();
+        expect(&mut ea, is_incoming).await;
+
+        let long = "a".repeat(129);
+        let cases = [
+            (None, DisplayNameKind::Empty),
+            (Some(""), DisplayNameKind::Empty),
+            (Some("a\nb"), DisplayNameKind::ControlCharacter),
+            (Some("\u{202E}x"), DisplayNameKind::BidiOverride),
+            (Some("a\u{200B}b"), DisplayNameKind::InvisibleCharacter),
+            (Some(long.as_str()), DisplayNameKind::TooLong),
+        ];
+        for (nickname, kind) in cases {
+            let err = respond_incoming(
+                &a.state,
+                &a.contacts,
+                &b.id.to_string(),
+                true,
+                nickname.map(str::to_owned),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err, NetCmdError::InvalidNickname { kind }, "{nickname:?}");
+        }
+        assert_eq!(pending_incoming(&a.state).unwrap().len(), 1);
+        assert!(book(&a).list().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn contacts_bound_even_if_node_start_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let (identity, settings, tickets) = provisioned_identity(&dir);
+        identity.provision().unwrap();
+        let broken = Arc::new(FlakyPresence {
+            inner: settings,
+            fail: false,
+            fail_relay: true,
+        });
+        let contacts = test_contacts();
+        let state = NetState::default();
+        assert!(contacts.book().is_none());
+
+        let started = start_if_present(
+            &state,
+            &identity,
+            broken,
+            tickets,
+            &contacts,
+            NodeConfig::loopback(),
+        )
+        .await;
+        assert!(!started);
+        assert!(state.node().is_err());
+        assert!(contacts.book().is_some());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -731,7 +881,7 @@ mod tests {
         let (mut ea, mut eb) = (events(&a), events(&b));
         connect_ticket(&b.state, &ticket_of(&a).await).unwrap();
         expect(&mut ea, is_incoming).await;
-        respond_incoming(&a.state, &b.id.to_string(), true).unwrap();
+        accept(&a, &b.id, "Bobby").await.unwrap();
         expect(
             &mut eb,
             is_state(a.id, Direction::Outbound, ConnectionState::Connected),
@@ -749,10 +899,12 @@ mod tests {
         a.state.shutdown_with_timeout(Duration::from_secs(2)).await;
     }
 
-    /// Delegates to a memory store and can be told to fail `set_presence`.
+    /// Delegates to a memory store and can be told to fail `set_presence`
+    /// and `get_relay_url`.
     struct FlakyPresence {
         inner: Arc<MemorySettingsStore>,
         fail: bool,
+        fail_relay: bool,
     }
 
     impl SettingsStore for FlakyPresence {
@@ -778,6 +930,9 @@ mod tests {
             self.inner.set_presence(id, on)
         }
         fn get_relay_url(&self, id: &AccountId) -> Result<Option<String>, SettingsError> {
+            if self.fail_relay {
+                return Err(SettingsError::Unavailable);
+            }
             self.inner.get_relay_url(id)
         }
         fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError> {
@@ -822,6 +977,13 @@ mod tests {
         (identity, settings, tickets)
     }
 
+    fn test_contacts() -> ContactsState {
+        ContactsState::new(
+            Arc::new(MemoryContactStore::new()),
+            Arc::new(RecordingHistoryEraser::new()),
+        )
+    }
+
     async fn start_with_override(
         state: &NetState,
         identity: &TestIdentity,
@@ -833,7 +995,7 @@ mod tests {
             identity,
             settings.clone(),
             tickets.clone(),
-            |_| Arc::new(MemoryKnownPeers::new()),
+            &test_contacts(),
             NodeConfig::loopback(),
         )
         .await
@@ -940,17 +1102,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (identity, settings, tickets) = provisioned_identity(&dir);
         let state = NetState::new(RelayOverride::Set("https://relay.example/".into()));
+        let contacts = test_contacts();
         let started = start_if_present(
             &state,
             &identity,
             settings.clone(),
             tickets.clone(),
-            |_| panic!("no node may be built without an identity"),
+            &contacts,
             NodeConfig::loopback(),
         )
         .await;
         assert!(!started);
         assert!(state.node().is_err());
+        assert!(contacts.book().is_none(), "no book without an identity");
 
         let provisioned = identity.provision().unwrap();
         assert!(start_with_override(&state, &identity, &settings, &tickets).await);
@@ -1034,8 +1198,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn presence_set_failure_maps_to_settings_unavailable() {
         let bus = MemoryLanBus::new();
-        let wrapper: SettingsWrapper =
-            Arc::new(|inner| Arc::new(FlakyPresence { inner, fail: true }));
+        let wrapper: SettingsWrapper = Arc::new(|inner| {
+            Arc::new(FlakyPresence {
+                inner,
+                fail: true,
+                fail_relay: false,
+            })
+        });
         let rest = spawn_test_node_wrapped(
             "Alice",
             TestOptions::default().with_lan(&bus),
@@ -1100,8 +1269,8 @@ mod tests {
             unreachable!()
         };
         assert_eq!(req.node_id, b.id);
-        assert!(!b.known.is_known(&a.id).unwrap());
-        respond_incoming(&a.state, &b.id.to_string(), true).unwrap();
+        assert!(!book(&b).is_known(&a.id).unwrap());
+        accept(&a, &b.id, "Bobby").await.unwrap();
         expect(
             &mut eb,
             is_state(a.id, Direction::Outbound, ConnectionState::Connected),
@@ -1117,7 +1286,7 @@ mod tests {
             unreachable!()
         };
         assert_eq!(req.node_id, c.id);
-        respond_incoming(&a.state, &c.id.to_string(), true).unwrap();
+        accept(&a, &c.id, "Carol").await.unwrap();
         expect(
             &mut ec,
             is_state(a.id, Direction::Outbound, ConnectionState::Connected),
@@ -1132,7 +1301,7 @@ mod tests {
         let mut ea = events(&a);
         connect_ticket(&b.state, &ticket_of(&a).await).unwrap();
         expect(&mut ea, is_incoming).await;
-        respond_incoming(&a.state, &b.id.to_string(), true).unwrap();
+        accept(&a, &b.id, "Bobby").await.unwrap();
 
         let seen = Mutex::new(BTreeSet::new());
         let collect = |ev: &NetEvent| {

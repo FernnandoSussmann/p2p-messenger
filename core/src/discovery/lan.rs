@@ -136,6 +136,10 @@ impl LanPeers {
         }
     }
 
+    pub fn get(&self, id: &NodeId) -> Option<&LanPeer> {
+        self.peers.get(id)
+    }
+
     /// Sorted by NodeId.
     pub fn snapshot(&self) -> Vec<LanPeer> {
         self.peers.values().cloned().collect()

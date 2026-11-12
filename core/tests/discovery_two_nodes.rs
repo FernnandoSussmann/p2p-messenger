@@ -7,15 +7,17 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use core::contacts::testing::BookCell;
+use core::contacts::{accept_incoming, FileContactStore, NoMessageStore, TrustState};
 use core::discovery::testing::{
     hello_frame, next_event, raw_dial, restart, spawn_test_node_with, FailingKnownPeers,
     MemoryAddressLookup, MemoryKnownPeers, TestNode, TestOptions,
 };
 use core::discovery::{
-    event_json, ConnectError, ConnectionState, Direction, FailureReason, FileKnownPeers,
-    GateLimits, MyTicketDto, NetEvent, CLOSE_PROTOCOL,
+    event_json, ConnectError, ConnectionState, Direction, FailureReason, GateLimits, MyTicketDto,
+    NetEvent, CLOSE_PROTOCOL,
 };
-use core::identity::{AccountId, KeychainStore, NodeId, Ticket};
+use core::identity::{KeychainStore, NodeId, Ticket};
 use iroh::endpoint::ConnectionError;
 use protocol::{new_message_id, ChatMessage, Envelope, Payload};
 use tokio::sync::broadcast::Receiver;
@@ -35,6 +37,21 @@ async fn node(name: &str) -> (TestNode, Arc<MemoryKnownPeers>) {
     let known = Arc::new(MemoryKnownPeers::new());
     let options = TestOptions::default().with_known(known.clone());
     (spawn_test_node_with(name, options).await, known)
+}
+
+/// A node whose trust store is a `ContactBook` over a file store in `dir`.
+async fn contacts_node(name: &str, dir: &Path) -> (TestNode, BookCell) {
+    let cell = BookCell::new();
+    let factory = cell.known_factory(
+        Arc::new(FileContactStore::new(dir)),
+        Arc::new(NoMessageStore),
+    );
+    let options = TestOptions::default().with_known_factory(factory);
+    (spawn_test_node_with(name, options).await, cell)
+}
+
+fn accept(node: &TestNode, cell: &BookCell, peer: &NodeId, nickname: &str) {
+    accept_incoming(&cell.get(), &node.node, peer, nickname).unwrap();
 }
 
 fn ticket(node: &TestNode) -> String {
@@ -59,7 +76,7 @@ fn state_is(
     state: ConnectionState,
 ) -> impl Fn(&NetEvent) -> bool {
     move |ev| {
-        matches!(ev, NetEvent::ConnectionState { node_id, direction: d, state: s }
+        matches!(ev, NetEvent::ConnectionState { node_id, direction: d, state: s, .. }
             if *node_id == peer && *d == direction && *s == state)
     }
 }
@@ -135,8 +152,9 @@ fn ticket_round_trip_yields_live_channel() {
         assert_eq!(a.node.connected_peers(), vec![b.id()]);
         assert_eq!(b.node.connected_peers(), vec![a.id()]);
         assert!(a.node.pending_incoming().is_empty());
-        assert_eq!(known_a.name_of(&b.id()).as_deref(), Some("Bob"));
-        assert_eq!(known_b.name_of(&a.id()).as_deref(), Some("Alice"));
+        // Inbound grants nothing without contacts; the dialer remembers.
+        assert!(known_a.is_empty());
+        assert_eq!(known_b.dialed(), vec![a.id()]);
     });
 }
 
@@ -296,22 +314,20 @@ fn pending_prompt_expires() {
 fn known_peer_reconnects_silently_across_restart() {
     run(async {
         let known_dir = tempfile::tempdir().unwrap();
-        let known = Arc::new(FileKnownPeers::new(known_dir.path(), AccountId::new()));
-        let a =
-            spawn_test_node_with("Alice", TestOptions::default().with_known(known.clone())).await;
+        let (a, cell) = contacts_node("Alice", known_dir.path()).await;
         let (b, _) = node("Bob").await;
         let (mut ea, mut eb) = (a.node.subscribe(), b.node.subscribe());
 
         b.node.connect_ticket(&ticket(&a)).unwrap();
         wait_for(&mut ea, is_incoming).await;
-        a.node.respond_incoming(&b.id(), true).unwrap();
+        accept(&a, &cell, &b.id(), "Bobby");
         wait_for(
             &mut eb,
             state_is(a.id(), Direction::Outbound, ConnectionState::Connected),
         )
         .await;
         let a_id = a.id();
-        assert!(known_dir.path().join("known_peers.json").is_file());
+        assert!(known_dir.path().join("contacts.json").is_file());
 
         let a = restart(a).await;
         assert_eq!(a.id(), a_id);
@@ -600,12 +616,13 @@ fn storage_error_fails_closed_and_prompts() {
 fn dialed_peer_is_remembered_only_after_a_valid_reply() {
     run(async {
         let (a, _) = node("Alice").await;
-        let (b, known_b) = node("Bob").await;
+        let dir_b = tempfile::tempdir().unwrap();
+        let (b, cell_b) = contacts_node("Bob", dir_b.path()).await;
         let (mut ea, mut eb) = (a.node.subscribe(), b.node.subscribe());
 
         b.node.connect_ticket(&ticket(&a)).unwrap();
         wait_for(&mut ea, is_incoming).await;
-        assert!(known_b.is_empty());
+        assert!(cell_b.get().list().unwrap().is_empty());
 
         a.node.respond_incoming(&b.id(), false).unwrap();
         wait_for(
@@ -617,7 +634,21 @@ fn dialed_peer_is_remembered_only_after_a_valid_reply() {
             ),
         )
         .await;
-        assert!(known_b.is_empty());
+        assert!(cell_b.get().list().unwrap().is_empty());
+
+        b.node.connect_ticket(&ticket(&a)).unwrap();
+        wait_for(&mut ea, is_incoming).await;
+        a.node.respond_incoming(&b.id(), true).unwrap();
+        wait_for(
+            &mut eb,
+            state_is(a.id(), Direction::Outbound, ConnectionState::Connected),
+        )
+        .await;
+        let contacts = cell_b.get().list().unwrap();
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts[0].node_id, a.id());
+        assert_eq!(contacts[0].nickname.as_str(), "Alice");
+        assert_eq!(contacts[0].trust, TrustState::Unverified);
     });
 }
 

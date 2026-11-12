@@ -55,7 +55,7 @@ describe("App view machine", () => {
   it("relaunch with Present status and a stored name goes to main, not the wizard", async () => {
     status.mockResolvedValue({ type: "Present", account_id: "a", node_id: "n" });
     render(App);
-    await screen.findByRole("tab", { name: "My Info" });
+    await fireEvent.click(await screen.findByRole("tab", { name: "My Info" }));
     expect((await screen.findByTestId("display-name")).textContent).toBe("Ada");
     expect(screen.queryByText("Welcome")).toBeNull();
     expect(provision).not.toHaveBeenCalled();
@@ -67,7 +67,7 @@ describe("App view machine", () => {
     myInfo.mockResolvedValue(info(null));
     setName.mockResolvedValue(undefined);
     render(App);
-    await screen.findByRole("tab", { name: "My Info" });
+    await fireEvent.click(await screen.findByRole("tab", { name: "My Info" }));
     const input = (await screen.findByLabelText("Display name")) as HTMLInputElement;
     expect(screen.queryByText("Welcome")).toBeNull();
     myInfo.mockResolvedValue(info("Bob"));

@@ -8,13 +8,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use core::contacts::testing::BookCell;
+use core::contacts::{accept_incoming, FileContactStore, NoMessageStore};
 use core::discovery::testing::{
-    next_event, restart, spawn_test_node_with, spawn_test_node_wrapped, MemoryKnownPeers,
-    MemoryLanBus, RecordingAddressLookup, SettingsWrapper, TestNode, TestOptions,
+    next_event, restart, spawn_test_node_with, spawn_test_node_wrapped, MemoryLanBus,
+    RecordingAddressLookup, SettingsWrapper, TestNode, TestOptions,
 };
 use core::discovery::{
-    event_json, ConnectionState, Direction, FileKnownPeers, LanEvent, LanMode, LanPeer, LanPeerDto,
-    NetEvent, NodeConfig, PresenceError, MAX_LAN_PEERS,
+    event_json, ConnectionState, Direction, LanEvent, LanMode, LanPeer, LanPeerDto, NetEvent,
+    NodeConfig, PresenceError, MAX_LAN_PEERS,
 };
 use core::identity::{
     AccountId, DisplayName, FileSettingsStore, MemorySettingsStore, NodeId, SettingsError,
@@ -32,6 +34,19 @@ fn run<F: std::future::Future>(fut: F) -> F::Output {
 
 const WAIT: Duration = Duration::from_secs(10);
 const QUIET: Duration = Duration::from_millis(600);
+
+/// A LAN node whose trust store is a `ContactBook` over a file store in `dir`.
+async fn contacts_lan_node(bus: &MemoryLanBus, name: &str, dir: &Path) -> (TestNode, BookCell) {
+    let cell = BookCell::new();
+    let factory = cell.known_factory(
+        Arc::new(FileContactStore::new(dir)),
+        Arc::new(NoMessageStore),
+    );
+    let options = TestOptions::default()
+        .with_lan(bus)
+        .with_known_factory(factory);
+    (spawn_test_node_with(name, options).await, cell)
+}
 
 async fn lan_node(bus: &MemoryLanBus, name: &str) -> TestNode {
     spawn_test_node_with(name, TestOptions::default().with_lan(bus)).await
@@ -107,7 +122,7 @@ fn is_incoming(ev: &NetEvent) -> bool {
 
 fn connected_to(peer: NodeId, direction: Direction) -> impl Fn(&NetEvent) -> bool {
     move |ev| {
-        matches!(ev, NetEvent::ConnectionState { node_id, direction: d, state: ConnectionState::Connected }
+        matches!(ev, NetEvent::ConnectionState { node_id, direction: d, state: ConnectionState::Connected, .. }
             if *node_id == peer && *d == direction)
     }
 }
@@ -349,8 +364,9 @@ fn presence_set_persist_failure_leaves_advertising_unchanged() {
 fn lan_pick_uses_the_same_trust_gate() {
     run(async {
         let bus = MemoryLanBus::new();
-        let a = lan_node(&bus, "Alice").await;
-        let b = lan_node(&bus, "Bob").await;
+        let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (a, cell_a) = contacts_lan_node(&bus, "Alice", dir_a.path()).await;
+        let (b, cell_b) = contacts_lan_node(&bus, "Bob", dir_b.path()).await;
         let (mut ea, mut eb) = (a.node.subscribe(), b.node.subscribe());
         until_lan(&b, &mut eb, |p| has(p, &a.id())).await;
 
@@ -362,7 +378,7 @@ fn lan_pick_uses_the_same_trust_gate() {
         let pending = a.node.pending_incoming();
         assert_eq!(pending.len(), 1, "exactly one prompt on A");
         assert_eq!(pending[0].node_id, b.id());
-        a.node.respond_incoming(&b.id(), true).unwrap();
+        accept_incoming(&cell_a.get(), &a.node, &b.id(), "Bobby").unwrap();
         wait_for(&mut eb, connected_to(a.id(), Direction::Outbound)).await;
 
         b.node.connect_ticket(&lan_ticket(&b, &a.id())).unwrap();
@@ -371,6 +387,7 @@ fn lan_pick_uses_the_same_trust_gate() {
             a.node.pending_incoming().is_empty(),
             "a known peer reconnects silently"
         );
+        assert!(cell_b.get().is_known(&a.id()).unwrap(), "dialing adds A");
     });
 }
 
@@ -481,10 +498,16 @@ fn lan_peers_are_never_persisted() {
         let known_dir = tempfile::tempdir().unwrap();
         let settings_dir = tempfile::tempdir().unwrap();
         let bus = MemoryLanBus::new();
-        let known = Arc::new(FileKnownPeers::new(known_dir.path(), AccountId::new()));
+        let cell = BookCell::new();
+        let factory = cell.known_factory(
+            Arc::new(FileContactStore::new(known_dir.path())),
+            Arc::new(NoMessageStore),
+        );
         let a = spawn_test_node_wrapped(
             "Alice",
-            TestOptions::default().with_lan(&bus).with_known(known),
+            TestOptions::default()
+                .with_lan(&bus)
+                .with_known_factory(factory),
             Some(file_presence(settings_dir.path())),
         )
         .await;
@@ -504,6 +527,7 @@ fn lan_peers_are_never_persisted() {
             }
         }
         assert!(settings_dir.path().join("settings.json").exists());
+        assert!(cell.get().list().unwrap().is_empty());
     });
 }
 
@@ -645,9 +669,10 @@ fn lan_events_are_debounced() {
 #[ignore = "needs a multicast-capable interface; run: cargo test -p core --test discovery_lan -- --ignored"]
 fn real_mdns_two_nodes_discover_each_other() {
     run(async {
-        let options = || TestOptions {
-            config: NodeConfig::loopback().with_lan(LanMode::Mdns),
-            known: Arc::new(MemoryKnownPeers::new()),
+        let options = || {
+            let mut options = TestOptions::default();
+            options.config = NodeConfig::loopback().with_lan(LanMode::Mdns);
+            options
         };
         let a = spawn_test_node_with("Alice", options()).await;
         let b = spawn_test_node_with("Bob", options()).await;

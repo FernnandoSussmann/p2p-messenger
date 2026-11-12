@@ -25,6 +25,10 @@ impl AccountId {
     pub fn as_uuid(&self) -> Uuid {
         self.0
     }
+
+    pub(crate) fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
 }
 
 impl Default for AccountId {
