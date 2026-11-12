@@ -114,6 +114,33 @@ recreated, and there is no "reset database" action. A missing file is
 recreated only during first-run provisioning or while importing legacy
 plaintext data.
 
+### Diagnostic logs
+
+The app writes a local diagnostic log, `messenger.log`, to the OS app log
+directory (a `profiles/<name>` subfolder under it for a `--profile`):
+
+- Linux: `$XDG_DATA_HOME/<app identifier>/logs` (usually
+  `~/.local/share/<app identifier>/logs`)
+- macOS: `~/Library/Logs/<app identifier>`
+- Windows: `%LOCALAPPDATA%\<app identifier>\logs`
+
+The default level is `info`. Set `MESSENGER_LOG` to `off`, `error`, `warn`,
+`info`, `debug` or `trace` to change it (our own crates only; third-party
+crates are capped at `warn`). Any other value refuses to start. `off` creates
+no file.
+
+Size is bounded: at most 5 files of 2 MiB each (`messenger.log` plus four
+rotated copies). On Unix the folder is `0700` and the files `0600`.
+
+Logged: connection lifecycle, hole-punch and path events, relay status,
+discovery events and errors, identified by short NodeId and address.
+Never logged: message bodies, search queries, display names and nicknames, the
+identity key, the database key and ticket strings. Logs are local only and
+never sent anywhere.
+
+Logs reveal *who* you connected to and *when* (short NodeIds, IP addresses).
+Deleting the log folder is a privacy action and is safe at any time.
+
 ### Chat
 
 Open **Contacts**, then a contact row's **Message** button. **Back** (or any tab)
@@ -266,6 +293,10 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 31. Quit and move `messenger.db` away from a profile that has an identity, then
     launch: the same screen shows with the "missing" reason and no new
     `messenger.db` is created. Move it back and **Retry**.
+32. With two instances connected, each profile's log folder contains
+    `messenger.log` (`0600` inside a `0700` folder) with `connection state` and
+    `path opened` lines. No name, nickname, message text or ticket appears in it.
+33. `MESSENGER_LOG=bogus npm start` refuses to start with a clear message.
 
 ## Two-device simulation
 
