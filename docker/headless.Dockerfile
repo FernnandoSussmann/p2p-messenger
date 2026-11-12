@@ -1,6 +1,9 @@
 FROM rust:1.95-slim-bookworm AS build
 WORKDIR /src
 COPY . .
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends perl make \
+    && rm -rf /var/lib/apt/lists/*
 RUN cargo build --release --locked -p messenger-headless
 
 FROM debian:bookworm-slim

@@ -27,6 +27,19 @@ pub const ALPN: &[u8] = b"p2p-messenger/1";
 /// to 4 UTF-8 bytes each) fits with room to spare.
 pub const MAX_HELLO_BYTES: usize = 1024;
 
+/// Upper bound, in UTF-8 bytes, of a [`ChatMessage::body`]. Senders refuse to
+/// encode more; receivers reject more. Raising it is a breaking change for
+/// older receivers and requires a `PROTOCOL_VERSION` bump.
+pub const MAX_BODY_BYTES: usize = 16 * 1024;
+
+/// Upper bound, in bytes, of one encoded `Chat` envelope: `MAX_BODY_BYTES` plus
+/// the envelope overhead (version varint, variant tag, 16-byte id with length
+/// prefix, zig-zag `sent_at_ms`, body length varint) with headroom.
+pub const MAX_FRAME_BYTES: usize = MAX_BODY_BYTES + 64;
+
+/// Upper bound, in bytes, of an encoded `Ack` envelope.
+pub const MAX_ACK_BYTES: usize = 64;
+
 /// Stable, globally-unique identifier for a single chat message.
 ///
 /// Used to correlate a sent message with its [`Ack`] and to deduplicate on the
@@ -159,6 +172,27 @@ mod tests {
         }));
         let bytes = env.encode().unwrap();
         assert!(bytes.len() <= MAX_HELLO_BYTES, "{} bytes", bytes.len());
+    }
+
+    #[test]
+    fn max_body_chat_fits_within_max_frame_bytes() {
+        let env = Envelope::new(Payload::Chat(ChatMessage {
+            id: new_message_id(),
+            sent_at_ms: i64::MIN,
+            body: "😀".repeat(MAX_BODY_BYTES / 4),
+        }));
+        let bytes = env.encode().unwrap();
+        assert!(bytes.len() > MAX_BODY_BYTES);
+        assert!(bytes.len() <= MAX_FRAME_BYTES, "{} bytes", bytes.len());
+    }
+
+    #[test]
+    fn ack_fits_within_max_ack_bytes() {
+        let env = Envelope::new(Payload::Ack(Ack {
+            id: new_message_id(),
+        }));
+        let bytes = env.encode().unwrap();
+        assert!(bytes.len() <= MAX_ACK_BYTES, "{} bytes", bytes.len());
     }
 
     #[test]
