@@ -295,6 +295,7 @@ where
             // Best effort: a failed delete must not mask the original error.
             let _ = self.keychain.delete_identity_key(&account_id);
             let _ = self.keychain.delete_db_key(&account_id);
+            let _ = self.settings.discard_new_account(&account_id);
             return Err(e);
         }
         Ok(Provisioned {

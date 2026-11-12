@@ -16,7 +16,7 @@ only once they carry real code — no empty stubs or placeholder modules.
 | Crate      | Status  | Responsibility                                               |
 | ---------- | ------- | ------------------------------------------------------------ |
 | `protocol` | present | Shared serde wire types (`Envelope`, `Payload`, …) + version |
-| `core`     | present | UI-agnostic logic by slices: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence) and `contacts` (contact book, trust, interim store) and `messaging` (message store and delivery engine) and `storage` (the single encrypted `messenger.db`: keyed open, typed errors, migrations) |
+| `core`     | present | UI-agnostic logic by slices: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence) and `contacts` (contact book, trust, encrypted contact store) and `messaging` (message store and delivery engine) and `storage` (the single encrypted `messenger.db`: keyed open, typed errors, migrations, one-shot import of the old plaintext files) and `logging` (rotating diagnostic log file) |
 | `app`      | present | Thin Tauri v2 + Svelte shell over `core`                     |
 | `headless` | present | Test-only headless node + file keyring for Level-3 simulation; never shipped, never used by `app` |
 
@@ -64,11 +64,12 @@ Trust rule: trust is the peer's NodeId, kept as a contact.
   name changes by the peer never change your nickname.
 - Two contacts may share a nickname; the NodeId tells them apart.
 - Declined or expired requests leave no trace.
-- Contacts are kept per account in `contacts.json` **in plaintext (nicknames
-  included) until DD-05's encrypted DB replaces it**.
-- An existing `known_peers.json` is migrated once at startup and deleted; its
-  peers still connect without a prompt. If the migration fails, they are
-  prompted again.
+- Contacts are kept per account in the encrypted `messenger.db` (see
+  Encrypted storage).
+- An existing `known_peers.json` is imported once at startup as Unverified
+  contacts and then removed; its peers still connect without a prompt. If the
+  file is unreadable it is skipped, left on disk **unencrypted**, and those
+  peers are prompted again; you can delete it yourself.
 
 Names (yours and peers') may no longer contain invisible characters such as
 zero-width spaces. Joiners are allowed only inside emoji sequences (👨‍👩‍👧,
@@ -97,14 +98,16 @@ in the Accept, naming and rename prompts, never in the list.
   stored messages with that contact from the encrypted message database.
 - Copying a NodeId: choose **Show full NodeId**, select it and use your
   system's copy shortcut.
-- Contacts are stored in plaintext until DD-05.
+- Contacts, including nicknames, are stored encrypted in `messenger.db`.
 
-### Message storage
+### Encrypted storage
 
-Messages live in `messenger.db` in the (profile) data directory, encrypted with
+Settings (display name, presence, relay override), contacts and messages all
+live in `messenger.db` in the (profile) data directory, encrypted with
 SQLCipher under the database key held in your OS keychain. The `storage` slice
 opens it, runs an integrity check, and applies forward-only, transactional
-schema migrations (the messages table is migration 1).
+schema migrations (messages, settings, contacts and the import bookkeeping are
+migrations 1 to 4). Nothing else on disk holds user data.
 
 If the database cannot be opened (wrong or missing key, damaged file, newer
 schema, failed migration, or the file is missing while an identity exists), the
@@ -112,7 +115,20 @@ app shows **Encrypted storage unavailable** with a **Retry** button, and
 networking stays down until it opens. The file is never reset, deleted or
 recreated, and there is no "reset database" action. A missing file is
 recreated only during first-run provisioning or while importing legacy
-plaintext data.
+plaintext data. A first-run provisioning that fails removes only the empty
+database it just created, so running the wizard again works.
+
+**Upgrading from the plaintext files.** Older versions kept `settings.json`,
+`contacts.json` and `known_peers.json` in the data directory. On the first
+start the app imports them into `messenger.db` in one transaction per file,
+then overwrites them with zeros and deletes them. A contact you remove later
+is never re-imported. If `settings.json` or `contacts.json` is corrupt or not a
+regular file, the storage screen shows an error, nothing is imported and the
+file is left untouched (fix or delete it, then Retry). A corrupt
+`known_peers.json` does not block: it is skipped, those peers are prompted
+again, and the file **stays on disk unencrypted** until you delete it.
+Overwriting a file does not guarantee erasure on SSDs, copy-on-write file
+systems (APFS, btrfs) or in backups and snapshots.
 
 ### Diagnostic logs
 
@@ -163,7 +179,7 @@ Commands: `chat_send`, `chat_resend`, `chat_history` and `history_search`; event
   zero-width or control characters show as �.
 - Search within a conversation finds words in its history. History and search
   read the encrypted store, so they work even if the node failed to start.
-  Storage is `messenger.db` (see Message storage).
+  Storage is `messenger.db` (see Encrypted storage).
 
 ### On this network, presence and relay
 

@@ -27,9 +27,9 @@ Cargo workspace built from vertical feature slices.
 Notes:
 - The package name `core` shadows std `core`; dependents import it with `package = "core"`.
 - Shared dependency versions live in the root `Cargo.toml` `[workspace.dependencies]`; member crates use `dep.workspace = true`.
-- `core` has a `test-support` feature exposing test doubles (e.g. `identity::testing`, `discovery::testing`, `contacts::testing`: `MemoryContactStore`, `FailingContactStore`, `RecordingHistoryEraser`, `BookCell`; `messaging::testing`: `MemoryMessageStore`, `FailingMessageStore`, `ChatPeer`, `Faults`, `send_raw_frame`). Discovery exposes authorized channels to other slices only through `ChannelHandler`; messaging never dials.
-- Messages live in the SQLCipher `messenger.db`, owned by `core::storage` (keyed open, typed `StorageError`, forward-only migrations; failures are latched, never reset or recreate the file); never write bodies anywhere else. Feature slices own their table SQL and register it as a migration.
-- Contacts are the single trust store (`ContactBook` implements `discovery::KnownPeers`); until DD-05 they live in plaintext `contacts.json`.
+- `core` has a `test-support` feature exposing test doubles (e.g. `identity::testing`, `discovery::testing`, `contacts::testing`: `MemoryContactStore`, `FailingContactStore`, `RecordingHistoryEraser`, `BookCell`; `identity::MemorySettingsStore` (always available); `messaging::testing`: `MemoryMessageStore`, `FailingMessageStore`, `ChatPeer`, `Faults`, `send_raw_frame`). Discovery exposes authorized channels to other slices only through `ChannelHandler`; messaging never dials.
+- All persisted user data (settings, contacts, messages) lives in the SQLCipher `messenger.db` through `core::storage` (keyed open, typed `StorageError`, forward-only migrations; failures are latched, never reset or recreate the file). Never write it anywhere else. New tables are new migrations in `storage/schema.rs`, with SQL owned by the slice and `account_id` on every row. The old plaintext `settings.json`, `contacts.json` and `known_peers.json` are only read once by `storage::legacy` and then removed.
+- Contacts are the single trust store (`ContactBook` implements `discovery::KnownPeers`).
 
 ## Commands
 

@@ -13,11 +13,13 @@ use tokio::task::JoinHandle;
 
 use super::{restart, spawn_test_node_wrapped, SettingsWrapper, TestNode, TestOptions};
 use crate::contacts::testing::BookCell;
-use crate::contacts::{accept_incoming, FileContactStore, Nickname, NoMessageStore};
+use crate::contacts::{accept_incoming, Nickname, NoMessageStore, SqlCipherContactStore};
 use crate::discovery::event_json;
 use crate::identity::{
-    AccountId, DisplayName, FileSettingsStore, MemorySettingsStore, SettingsError, SettingsStore,
+    AccountId, DbKey, DisplayName, KeychainError, MemorySettingsStore, SettingsError,
+    SettingsStore, SqlCipherSettingsStore,
 };
+use crate::storage::{KeySource, Storage};
 
 const EVENT_BUFFER: usize = 256;
 const POLL: Duration = Duration::from_millis(25);
@@ -153,13 +155,23 @@ pub async fn presence_off_persists_and_stays_dialable(
     assert!(a.presence().await, "ON survives a restart");
 }
 
-/// Presence goes to a file so it survives a restart; the rest stays in memory.
-struct FilePresence {
-    inner: Arc<MemorySettingsStore>,
-    file: FileSettingsStore,
+/// One fixed DB key for every account of a scenario.
+struct FixedKey([u8; 32]);
+
+impl KeySource for FixedKey {
+    fn db_key(&self, _: &AccountId) -> Result<DbKey, KeychainError> {
+        Ok(DbKey::from_bytes(self.0))
+    }
 }
 
-impl SettingsStore for FilePresence {
+/// Presence goes to the encrypted database so it survives a restart; the rest
+/// stays in memory.
+struct SqlPresence {
+    inner: Arc<MemorySettingsStore>,
+    sql: SqlCipherSettingsStore,
+}
+
+impl SettingsStore for SqlPresence {
     fn set_display_name(&self, id: &AccountId, name: &DisplayName) -> Result<(), SettingsError> {
         self.inner.set_display_name(id, name)
     }
@@ -173,10 +185,10 @@ impl SettingsStore for FilePresence {
         self.inner.get_provisioned_at(id)
     }
     fn get_presence(&self, id: &AccountId) -> Result<Option<bool>, SettingsError> {
-        self.file.get_presence(id)
+        self.sql.get_presence(id)
     }
     fn set_presence(&self, id: &AccountId, on: bool) -> Result<(), SettingsError> {
-        self.file.set_presence(id, on)
+        self.sql.set_presence(id, on)
     }
     fn get_relay_url(&self, id: &AccountId) -> Result<Option<String>, SettingsError> {
         self.inner.get_relay_url(id)
@@ -189,7 +201,7 @@ impl SettingsStore for FilePresence {
 type EventBuffer = Arc<Mutex<VecDeque<(&'static str, Value)>>>;
 
 /// A [`NodeDriver`] over an in-process [`TestNode`]. Contacts and presence
-/// are file-backed, so they survive [`NodeDriver::restart`].
+/// live in an encrypted database, so they survive [`NodeDriver::restart`].
 pub struct InProcessDriver {
     node: Option<TestNode>,
     book: BookCell,
@@ -202,13 +214,16 @@ impl InProcessDriver {
     pub async fn new(name: &str) -> Self {
         let store = TempDir::new().expect("temp dir");
         let book = BookCell::new();
-        let contacts = Arc::new(FileContactStore::new(store.path()));
+        let storage = Arc::new(Storage::new(
+            store.path(),
+            Arc::new(FixedKey(rand::random())),
+        ));
+        let contacts = Arc::new(SqlCipherContactStore::new(storage.clone()));
         let known = book.known_factory(contacts, Arc::new(NoMessageStore));
-        let dir = store.path().to_path_buf();
         let wrapper: SettingsWrapper = Arc::new(move |inner| {
-            Arc::new(FilePresence {
+            Arc::new(SqlPresence {
                 inner,
-                file: FileSettingsStore::new(&dir),
+                sql: SqlCipherSettingsStore::new(storage.clone()),
             })
         });
         let options = TestOptions::default().with_known_factory(known);

@@ -1,5 +1,5 @@
 //! Level-1 contacts integration: real iroh endpoints on loopback whose trust
-//! store is a `ContactBook` over a `FileContactStore`. The package name `core`
+//! store is a `ContactBook` over a `SqlCipherContactStore`. The package name `core`
 //! shadows std `core`, which breaks `#[tokio::test]`, so tests run through
 //! `run`.
 
@@ -9,15 +9,18 @@ use std::time::Duration;
 
 use core::contacts::testing::BookCell;
 use core::contacts::{
-    accept_incoming, migrate_legacy_known_peers, AcceptError, ContactBook, FileContactStore,
-    HistoryChoice, NoMessageStore, TrustState,
+    accept_incoming, AcceptError, ContactBook, HistoryChoice, NoMessageStore,
+    SqlCipherContactStore, TrustState,
 };
 use core::discovery::testing::{
     hello_frame, next_event, raw_dial, restart, spawn_test_node_with, MemoryLanBus, TestNode,
     TestOptions,
 };
 use core::discovery::{ConnectionState, Direction, NetEvent};
-use core::identity::{AccountId, DisplayNameError, IdentityStatus, NodeId, Ticket};
+use core::identity::{
+    AccountId, DbKey, DisplayNameError, IdentityStatus, KeychainError, NodeId, Ticket,
+};
+use core::storage::{KeySource, Storage};
 use tokio::sync::broadcast::Receiver;
 
 fn run<F: std::future::Future>(fut: F) -> F::Output {
@@ -31,17 +34,36 @@ fn run<F: std::future::Future>(fut: F) -> F::Output {
 const WAIT: Duration = Duration::from_secs(10);
 const QUIET: Duration = Duration::from_millis(600);
 
-fn options(dir: &Path, cell: &BookCell) -> TestOptions {
-    let factory = cell.known_factory(
-        Arc::new(FileContactStore::new(dir)),
-        Arc::new(NoMessageStore),
-    );
+/// One fixed DB key for every account of a test, so a second `Storage` over
+/// the same directory can reopen what the first wrote.
+struct FixedKey([u8; 32]);
+
+impl KeySource for FixedKey {
+    fn db_key(&self, _: &AccountId) -> Result<DbKey, KeychainError> {
+        Ok(DbKey::from_bytes(self.0))
+    }
+}
+
+fn new_keys() -> Arc<FixedKey> {
+    Arc::new(FixedKey(rand::random()))
+}
+
+fn options(dir: &Path, cell: &BookCell, keys: &Arc<FixedKey>) -> TestOptions {
+    let store = SqlCipherContactStore::new(Arc::new(Storage::new(dir, keys.clone())));
+    let factory = cell.known_factory(Arc::new(store), Arc::new(NoMessageStore));
     TestOptions::default().with_known_factory(factory)
 }
 
-async fn cnode(name: &str, dir: &Path) -> (TestNode, BookCell) {
+async fn cnode_with(name: &str, dir: &Path, keys: &Arc<FixedKey>) -> (TestNode, BookCell) {
     let cell = BookCell::new();
-    (spawn_test_node_with(name, options(dir, &cell)).await, cell)
+    (
+        spawn_test_node_with(name, options(dir, &cell, keys)).await,
+        cell,
+    )
+}
+
+async fn cnode(name: &str, dir: &Path) -> (TestNode, BookCell) {
+    cnode_with(name, dir, &new_keys()).await
 }
 
 fn ticket(node: &TestNode) -> String {
@@ -237,7 +259,11 @@ fn lan_name_change_updates_self_name_of_existing_contact_only() {
         let bus = MemoryLanBus::new();
         let dir_a = tempfile::tempdir().unwrap();
         let cell = BookCell::new();
-        let a = spawn_test_node_with("Alice", options(dir_a.path(), &cell).with_lan(&bus)).await;
+        let a = spawn_test_node_with(
+            "Alice",
+            options(dir_a.path(), &cell, &new_keys()).with_lan(&bus),
+        )
+        .await;
         let lan = |name: &'static str| {
             let bus = bus.clone();
             async move { spawn_test_node_with(name, TestOptions::default().with_lan(&bus)).await }
@@ -345,15 +371,14 @@ fn hello_name_with_invisible_char_is_dropped() {
 }
 
 #[test]
-fn corrupt_contacts_file_fails_closed_and_prompts() {
+fn unreadable_contact_store_fails_closed_and_prompts() {
     run(async {
         let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let (a, cell_a) = cnode("Alice", dir_a.path()).await;
+        let (a, _cell_a) = cnode("Alice", dir_a.path()).await;
         let (b, _) = cnode("Bob", dir_b.path()).await;
-        dial_and_accept(&b, &a, &cell_a, "Bobby").await;
-        drop_connection(&b, &a).await;
 
-        let path = dir_a.path().join("contacts.json");
+        // The encrypted file cannot be opened: trust is unknown, never "known".
+        let path = dir_a.path().join("messenger.db");
         std::fs::write(&path, "garbage").unwrap();
         let mut ea = a.node.subscribe();
         b.node.connect_ticket(&ticket(&a)).unwrap();
@@ -363,10 +388,11 @@ fn corrupt_contacts_file_fails_closed_and_prompts() {
 }
 
 #[test]
-fn legacy_known_peers_reconnect_silently_after_migration() {
+fn legacy_known_peers_reconnect_silently_after_import() {
     run(async {
         let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let (a, cell_a) = cnode("Alice", dir_a.path()).await;
+        let keys = new_keys();
+        let (a, cell_a) = cnode_with("Alice", dir_a.path(), &keys).await;
         let (b, _) = cnode("Bob", dir_b.path()).await;
         let IdentityStatus::Present { account_id, .. } = a.identity.status() else {
             panic!("provisioned")
@@ -377,9 +403,10 @@ fn legacy_known_peers_reconnect_silently_after_migration() {
         }});
         let legacy_path = dir_a.path().join("known_peers.json");
         std::fs::write(&legacy_path, legacy.to_string()).unwrap();
-        let store = FileContactStore::new(dir_a.path());
-        let report = migrate_legacy_known_peers(dir_a.path(), &store).unwrap();
-        assert_eq!(report.migrated, 1);
+        // The first open of the encrypted database imports the legacy file.
+        Storage::new(dir_a.path(), keys.clone())
+            .database(&account_id)
+            .unwrap();
         assert!(!legacy_path.exists());
 
         let (mut ea, mut eb) = (a.node.subscribe(), b.node.subscribe());
@@ -400,14 +427,28 @@ fn legacy_known_peers_reconnect_silently_after_migration() {
 fn contacts_are_namespaced_by_account_end_to_end() {
     run(async {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(FileContactStore::new(dir.path()));
+        let keys = new_keys();
+        let store = Arc::new(SqlCipherContactStore::new(Arc::new(Storage::new(
+            dir.path(),
+            keys.clone(),
+        ))));
         let cell = BookCell::new();
         let factory = cell.known_factory(store.clone(), Arc::new(NoMessageStore));
         let a =
             spawn_test_node_with("Alice", TestOptions::default().with_known_factory(factory)).await;
         let (b, _) = cnode("Bob", tempfile::tempdir().unwrap().path()).await;
 
-        let other = ContactBook::new(AccountId::new(), a.id(), store, Arc::new(NoMessageStore));
+        // Another account's own handle on the same encrypted file.
+        let other_store = Arc::new(SqlCipherContactStore::new(Arc::new(Storage::new(
+            dir.path(),
+            keys,
+        ))));
+        let other = ContactBook::new(
+            AccountId::new(),
+            a.id(),
+            other_store,
+            Arc::new(NoMessageStore),
+        );
         other.add(b.id(), "Bobby", None).unwrap();
         assert!(other.is_known(&b.id()).unwrap());
         assert!(!cell.get().is_known(&b.id()).unwrap());

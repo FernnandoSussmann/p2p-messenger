@@ -6,10 +6,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// FTS maintenance statement (see the `messages_fts` exception).
-const SQL_ALLOWLIST: &[&str] = &["SQL_FTS_OPTIMIZE"];
-/// External-content FTS index reached only through a join on `messages`.
-const TABLE_ALLOWLIST: &[&str] = &["messages_fts"];
+/// FTS maintenance statement (see the `messages_fts` exception), and the
+/// statements on `legacy_imports`, the install-level bookkeeping table of the
+/// legacy import (one row per plaintext file, not per account).
+const SQL_ALLOWLIST: &[&str] = &["SQL_FTS_OPTIMIZE", "SQL_LEGACY_SEEN", "SQL_LEGACY_RECORD"];
+/// External-content FTS index reached only through a join on `messages`
+/// (the `messages_fts` exception), and `legacy_imports` (install-level
+/// bookkeeping, like `user_version`).
+const TABLE_ALLOWLIST: &[&str] = &["messages_fts", "legacy_imports"];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(dir).unwrap() {

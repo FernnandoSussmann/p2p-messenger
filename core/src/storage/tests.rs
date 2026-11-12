@@ -150,7 +150,7 @@ fn newer_schema_is_refused() {
     open(&dir, &k)
         .conn()
         .unwrap()
-        .execute_batch("PRAGMA user_version = 2;")
+        .execute_batch(&format!("PRAGMA user_version = {};", SCHEMA_VERSION + 1))
         .unwrap();
     let before = fs::read(db_path(&dir)).unwrap();
     let err = open_with(&dir, &k, MIGRATIONS).err().unwrap();
@@ -202,12 +202,12 @@ fn session_pragmas_are_enforced() {
 
 const SYNTHETIC: [Migration; 2] = [
     Migration {
-        version: 2,
+        version: SCHEMA_VERSION + 1,
         label: "add-column",
         sql: "ALTER TABLE messages ADD COLUMN flags INTEGER NOT NULL DEFAULT 0;",
     },
     Migration {
-        version: 3,
+        version: SCHEMA_VERSION + 2,
         label: "extras",
         sql: "CREATE TABLE extras (account_id BLOB NOT NULL, x TEXT);",
     },
@@ -228,7 +228,7 @@ fn forward_migration_keeps_rows() {
     drop(db);
 
     let db = open_with(&dir, &k, &extended()).unwrap();
-    assert_eq!(user_version(&db), 3);
+    assert_eq!(user_version(&db), SCHEMA_VERSION + 2);
     let (n, flags): (i64, i64) = db
         .conn()
         .unwrap()
@@ -247,18 +247,23 @@ fn forward_migration_keeps_rows() {
 fn failing_migration_rolls_back_and_keeps_version() {
     let dir = tempfile::tempdir().unwrap();
     let k = key();
-    open_with(&dir, &k, &MIGRATIONS[..1]).unwrap();
+    open_with(&dir, &k, MIGRATIONS).unwrap();
     let failing = Migration {
-        version: 2,
+        version: SCHEMA_VERSION + 1,
         label: "broken",
         sql: "CREATE TABLE t(x); INSERT INTO missing VALUES (1);",
     };
     let list: Vec<Migration> = MIGRATIONS.iter().copied().chain([failing]).collect();
     let err = open_with(&dir, &k, &list).err().unwrap();
-    assert_eq!(err, StorageError::MigrationFailed { version: 2 });
+    assert_eq!(
+        err,
+        StorageError::MigrationFailed {
+            version: SCHEMA_VERSION + 1
+        }
+    );
 
-    let db = open_with(&dir, &k, &MIGRATIONS[..1]).unwrap();
-    assert_eq!(user_version(&db), 1);
+    let db = open_with(&dir, &k, MIGRATIONS).unwrap();
+    assert_eq!(user_version(&db), SCHEMA_VERSION);
     let tables: i64 = db
         .conn()
         .unwrap()
@@ -290,7 +295,7 @@ fn migrations_are_contiguous_and_match_schema_version() {
 }
 
 /// The schema text exactly as DD-04 shipped it, with `user_version = 1`.
-const DD04_SCHEMA: &str = "
+pub(super) const DD04_SCHEMA: &str = "
 CREATE TABLE messages (
   seq            INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id     BLOB    NOT NULL CHECK (length(account_id) = 16),
@@ -443,11 +448,12 @@ fn create_allowed_without_marker() {
 fn create_allowed_with_legacy_files() {
     for legacy in ["settings.json", "contacts.json", "known_peers.json"] {
         let (dir, keychain, account, _) = installed();
-        fs::write(dir.path().join(legacy), "{}").unwrap();
+        fs::write(dir.path().join(legacy), r#"{"version":1,"accounts":{}}"#).unwrap();
         Storage::new(dir.path(), keychain)
             .database(&account)
             .unwrap();
         assert!(db_path(&dir).exists(), "{legacy}");
+        assert!(!dir.path().join(legacy).exists(), "{legacy} imported");
     }
 }
 

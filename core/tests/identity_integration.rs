@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use core::identity::testing::FakeKeychain;
 use core::identity::{
-    FileSettingsStore, IdentityService, IdentityStatus, KeychainStore, MemorySettingsStore,
-    MyInfoError, NodeIdTicketProvider, ProvisionError, SettingsStore, Ticket,
+    IdentityService, IdentityStatus, KeychainStore, MemorySettingsStore, MyInfoError,
+    NodeIdTicketProvider, ProvisionError, SettingsStore, SqlCipherSettingsStore, Ticket,
 };
+use core::storage::Storage;
 
 type Node = IdentityService<FakeKeychain, MemorySettingsStore, NodeIdTicketProvider>;
 
@@ -123,11 +124,14 @@ fn restart_yields_same_node_id_repeated() {
 
 #[test]
 fn display_name_and_provisioned_at_survive_restart() {
-    type FileNode = IdentityService<Arc<FakeKeychain>, FileSettingsStore, NodeIdTicketProvider>;
-    let build = |keychain: &Arc<FakeKeychain>, dir: &tempfile::TempDir| -> FileNode {
+    type SqlNode = IdentityService<Arc<FakeKeychain>, SqlCipherSettingsStore, NodeIdTicketProvider>;
+    let settings = |keychain: &Arc<FakeKeychain>, dir: &tempfile::TempDir| {
+        SqlCipherSettingsStore::new(Arc::new(Storage::new(dir.path(), keychain.clone())))
+    };
+    let build = |keychain: &Arc<FakeKeychain>, dir: &tempfile::TempDir| -> SqlNode {
         IdentityService::new(
             Arc::clone(keychain),
-            FileSettingsStore::new(dir.path()),
+            settings(keychain, dir),
             NodeIdTicketProvider,
             dir.path(),
         )
@@ -138,7 +142,7 @@ fn display_name_and_provisioned_at_survive_restart() {
     let first = build(&keychain, &dir);
     let provisioned = first.provision().unwrap();
     first.set_display_name("Ada 🦀").unwrap();
-    let before = FileSettingsStore::new(dir.path())
+    let before = settings(&keychain, &dir)
         .get_provisioned_at(&provisioned.account_id)
         .unwrap();
     assert!(before.is_some());
@@ -154,13 +158,14 @@ fn display_name_and_provisioned_at_survive_restart() {
     );
     let name = second.my_info().unwrap().display_name;
     assert_eq!(name.as_ref().map(|n| n.as_str()), Some("Ada 🦀"));
-    let after = FileSettingsStore::new(dir.path())
+    let after = settings(&keychain, &dir)
         .get_provisioned_at(&provisioned.account_id)
         .unwrap();
     assert_eq!(before, after);
     drop(second);
 
-    std::fs::write(dir.path().join("settings.json"), b"not json {{{").unwrap();
+    assert!(!dir.path().join("settings.json").exists());
+    keychain.replace_db_key_with_random(&provisioned.account_id);
     let third = build(&keychain, &dir);
     assert!(matches!(third.my_info(), Err(MyInfoError::Settings(_))));
     assert!(matches!(third.status(), IdentityStatus::Present { .. }));

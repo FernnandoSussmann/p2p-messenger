@@ -17,7 +17,7 @@ impl From<ContactStoreError> for ContactError {
             ContactStoreError::NotFound => Self::NotFound,
             ContactStoreError::AlreadyExists => Self::AlreadyExists,
             ContactStoreError::Full => Self::Full,
-            ContactStoreError::Corrupt | ContactStoreError::Io(_) => Self::Unavailable,
+            ContactStoreError::Corrupt | ContactStoreError::Unavailable => Self::Unavailable,
         }
     }
 }
