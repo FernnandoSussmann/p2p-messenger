@@ -19,7 +19,7 @@ use tauri::{Manager, RunEvent};
 
 const APP_TITLE: &str = "p2p-messenger";
 
-use chat_cmd::ChatState;
+use chat_cmd::{chat_history, chat_resend, chat_send, history_search, ChatState};
 use contacts_cmd::{
     contacts_add, contacts_is_known, contacts_list, contacts_remove, contacts_rename,
     contacts_set_verified, ContactsState,
@@ -105,13 +105,18 @@ pub fn run() {
             contacts_rename,
             contacts_set_verified,
             contacts_remove,
-            contacts_is_known
+            contacts_is_known,
+            chat_send,
+            chat_resend,
+            chat_history,
+            history_search
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
     app.run(|app, event| {
         if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+            app.state::<Arc<ChatState>>().shutdown();
             let state = app.state::<NetState>();
             tauri::async_runtime::block_on(state.shutdown_with_timeout(SHUTDOWN_TIMEOUT));
         }

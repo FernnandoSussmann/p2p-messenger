@@ -21,12 +21,13 @@ use messenger_core::identity::{
     IdentityStatus, KeychainStore, NodeId, SettingsError, SettingsStore, TicketError,
     TicketProvider,
 };
+use messenger_core::messaging::MessagingConfig;
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::chat_cmd::ChatState;
+use crate::chat_cmd::{forward_chat, ChatState};
 use crate::contacts_cmd::ContactsState;
 use crate::identity_cmd::{AppIdentity, DisplayNameKind};
 
@@ -402,8 +403,29 @@ pub fn ensure_started(app: &AppHandle) {
         }
         let Ok(node) = state.node() else { return };
         let mut events = node.subscribe();
+        let chat_events = match contacts.book() {
+            Some(book) => match chat
+                .start_messaging(&node, book, MessagingConfig::desktop())
+                .await
+            {
+                Ok(messaging) => Some(messaging.subscribe()),
+                Err(_) => {
+                    eprintln!("messaging unavailable; chat sending is disabled");
+                    None
+                }
+            },
+            None => None,
+        };
         drop(node);
         let _ = app.emit("my_ticket_changed", Value::Null);
+        if let Some(mut chat_events) = chat_events {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                while forward_chat(chat_events.recv().await, |name, payload| {
+                    let _ = app.emit(name, payload);
+                }) {}
+            });
+        }
         loop {
             match events.recv().await {
                 Ok(ev) => forward(&ev, |name, payload| {
@@ -487,24 +509,9 @@ mod tests {
     use super::*;
     use crate::identity_cmd::{my_info, provision};
     use crate::test_util::{
-        assert_forms_absent, events, expect, is_incoming, is_state, started, started_with,
-        ticket_of, Started, WAIT,
+        accept, assert_forms_absent, decline, events, expect, is_incoming, is_state, started,
+        started_with, ticket_of, Started, WAIT,
     };
-
-    async fn accept(s: &Started, peer: &NodeId, nickname: &str) -> Result<(), NetCmdError> {
-        respond_incoming(
-            &s.state,
-            &s.contacts,
-            &peer.to_string(),
-            true,
-            Some(nickname.to_owned()),
-        )
-        .await
-    }
-
-    async fn decline(s: &Started, peer: &NodeId) -> Result<(), NetCmdError> {
-        respond_incoming(&s.state, &s.contacts, &peer.to_string(), false, None).await
-    }
 
     fn book(s: &Started) -> Arc<messenger_core::contacts::ContactBook> {
         s.contacts.book().expect("contacts are bound")
@@ -907,11 +914,11 @@ mod tests {
         }
 
         assert!(!start!());
-        assert!(chat.store().is_none(), "no store without an identity");
+        assert!(chat.store_ref().is_err(), "no store without an identity");
 
         identity.provision().unwrap();
         assert!(start!());
-        let (account, store) = chat.store().expect("store opened");
+        let (account, store) = chat.store_ref().expect("store opened");
         assert_eq!(account, account_of(&identity));
         assert!(dir.path().join(messenger_core::messaging::DB_FILE).exists());
         assert!(store

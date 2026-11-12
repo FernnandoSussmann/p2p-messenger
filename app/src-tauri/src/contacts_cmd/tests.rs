@@ -11,8 +11,8 @@ use super::*;
 use crate::chat_cmd::ChatState;
 use crate::net_cmd::{connect_ticket, lan_peers, pending_incoming};
 use crate::test_util::{
-    assert_forms_absent, events, expect, is_incoming, is_state, started, started_with, ticket_of,
-    Started, WAIT,
+    assert_forms_absent, connect_pair, events, expect, is_incoming, is_state, started,
+    started_with, started_with_chat, ticket_of, ChatLog, Started, WAIT,
 };
 
 const DTO_KEYS: [&str; 6] = [
@@ -74,7 +74,12 @@ async fn contacts_commands_not_ready_before_bind() {
     assert_eq!(add(&c, &net, &peer, "x").await.unwrap_err(), not_ready);
     assert_eq!(rename(&c, &peer, "x").await.unwrap_err(), not_ready);
     assert_eq!(set_verified(&c, &peer, true).await.unwrap_err(), not_ready);
-    assert_eq!(remove(&c, &net, &peer, None).await.unwrap_err(), not_ready);
+    assert_eq!(
+        remove(&c, &net, &ChatState::new(), &peer, None)
+            .await
+            .unwrap_err(),
+        not_ready
+    );
     assert_eq!(is_known(&c, &peer).await.unwrap_err(), not_ready);
 }
 
@@ -117,7 +122,9 @@ async fn contact_dto_json_shape() {
         .collect();
     keys.sort();
     assert_eq!(keys, DTO_KEYS);
-    let removed = remove(&c, &net, &id(2), None).await.unwrap();
+    let removed = remove(&c, &net, &ChatState::new(), &id(2), None)
+        .await
+        .unwrap();
     let mut keys: Vec<String> = serde_json::to_value(&removed)
         .unwrap()
         .as_object()
@@ -303,7 +310,9 @@ async fn contacts_remove_defaults_to_keeping_history() {
         let c = bound(Arc::new(MemoryContactStore::new()), history.clone());
         let net = NetState::default();
         add(&c, &net, &id(2), "Bobby").await.unwrap();
-        let r = remove(&c, &net, &id(2), flag).await.unwrap();
+        let r = remove(&c, &net, &ChatState::new(), &id(2), flag)
+            .await
+            .unwrap();
         assert!(!r.history_erased);
         assert_eq!(r.node_id, id(2));
         assert!(history.calls().is_empty());
@@ -317,7 +326,9 @@ async fn contacts_remove_with_clear_history_erases_then_removes() {
     let c = bound(Arc::new(MemoryContactStore::new()), history.clone());
     let net = NetState::default();
     add(&c, &net, &id(2), "Bobby").await.unwrap();
-    let r = remove(&c, &net, &id(2), Some(true)).await.unwrap();
+    let r = remove(&c, &net, &ChatState::new(), &id(2), Some(true))
+        .await
+        .unwrap();
     assert!(r.history_erased);
     assert_eq!(history.calls().len(), 1);
     assert_eq!(history.calls()[0].1, node(2));
@@ -341,7 +352,7 @@ async fn remove_with_erase_deletes_stored_messages() {
         identity.provision().unwrap();
         let chat = Arc::new(ChatState::new());
         chat.open_store(&identity).unwrap();
-        let (account, store) = chat.store().unwrap();
+        let (account, store) = chat.store_ref().unwrap();
         let c = ContactsState::new(Arc::new(MemoryContactStore::new()), chat.clone());
         c.bind(account, node(1));
         let net = NetState::default();
@@ -359,7 +370,7 @@ async fn remove_with_erase_deletes_stored_messages() {
             .insert_incoming(&account, &node(2), &msg("in"), 2)
             .unwrap();
 
-        remove(&c, &net, &id(2), flag).await.unwrap();
+        remove(&c, &net, &chat, &id(2), flag).await.unwrap();
         let rows = store.page(&account, &node(2), None, 10).unwrap();
         assert_eq!(rows.len(), kept, "{flag:?}");
     }
@@ -372,7 +383,9 @@ async fn contacts_remove_history_failure_keeps_contact() {
     let net = NetState::default();
     add(&c, &net, &id(2), "Bobby").await.unwrap();
     assert_eq!(
-        remove(&c, &net, &id(2), Some(true)).await.unwrap_err(),
+        remove(&c, &net, &ChatState::new(), &id(2), Some(true))
+            .await
+            .unwrap_err(),
         ContactsCmdError::HistoryEraseFailed
     );
     assert_eq!(list(&c).await.unwrap().len(), 1);
@@ -383,9 +396,15 @@ async fn contacts_remove_unknown_is_not_found() {
     let history = Arc::new(RecordingHistoryEraser::new());
     let c = bound(Arc::new(MemoryContactStore::new()), history.clone());
     assert_eq!(
-        remove(&c, &NetState::default(), &id(2), Some(true))
-            .await
-            .unwrap_err(),
+        remove(
+            &c,
+            &NetState::default(),
+            &ChatState::new(),
+            &id(2),
+            Some(true)
+        )
+        .await
+        .unwrap_err(),
         ContactsCmdError::NotFound
     );
     assert!(history.calls().is_empty());
@@ -406,9 +425,15 @@ async fn contacts_remove_drops_live_connection_and_next_inbound_prompts() {
     )
     .await;
 
-    remove(&a.contacts, &a.state, &b.id.to_string(), None)
-        .await
-        .unwrap();
+    remove(
+        &a.contacts,
+        &a.state,
+        &ChatState::new(),
+        &b.id.to_string(),
+        None,
+    )
+    .await
+    .unwrap();
     expect(
         &mut eb,
         is_state(a.id, Direction::Outbound, ConnectionState::Disconnected),
@@ -427,7 +452,9 @@ async fn contacts_is_known_tracks_add_and_remove() {
     assert!(!is_known(&c, &id(2)).await.unwrap());
     add(&c, &net, &id(2), "Bobby").await.unwrap();
     assert!(is_known(&c, &id(2)).await.unwrap());
-    remove(&c, &net, &id(2), None).await.unwrap();
+    remove(&c, &net, &ChatState::new(), &id(2), None)
+        .await
+        .unwrap();
     assert!(!is_known(&c, &id(2)).await.unwrap());
     assert_eq!(
         is_known(&c, "nope").await.unwrap_err(),
@@ -462,7 +489,9 @@ async fn contacts_are_namespaced_by_bound_account() {
     assert!(list(&two).await.unwrap().is_empty());
     assert!(!is_known(&two, &id(2)).await.unwrap());
     assert_eq!(
-        remove(&two, &net, &id(2), None).await.unwrap_err(),
+        remove(&two, &net, &ChatState::new(), &id(2), None)
+            .await
+            .unwrap_err(),
         ContactsCmdError::NotFound
     );
     assert!(is_known(&one, &id(2)).await.unwrap());
@@ -476,4 +505,64 @@ async fn contact_dtos_never_contain_key_material() {
     add(&a.contacts, &a.state, &id(2), "Bobby").await.unwrap();
     let json = serde_json::to_string(&list(&a.contacts).await.unwrap()).unwrap();
     assert_forms_absent(&json, &key);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_with_erase_clears_chat_history_end_to_end() {
+    for (flag, kept) in [(Some(true), 0), (Some(false), 1)] {
+        let (a, b) = (
+            started_with_chat("Alice").await,
+            started_with_chat("Bob").await,
+        );
+        connect_pair(&a, &b).await;
+        let log = ChatLog::record(&a.messaging);
+        let sent = crate::chat_cmd::send(&a.chat, &b.id.to_string(), "hello".into())
+            .await
+            .unwrap();
+        log.wait_status(&sent.id, "delivered").await;
+
+        remove(&a.contacts, &a.state, &a.chat, &b.id.to_string(), flag)
+            .await
+            .unwrap();
+        let page = crate::chat_cmd::history(&a.chat, &b.id.to_string(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(page.messages.len(), kept, "{flag:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_contact_fails_queued_messages() {
+    let (a, b) = (
+        started_with_chat("Alice").await,
+        started_with_chat("Bob").await,
+    );
+    connect_pair(&a, &b).await;
+    a.state.node().unwrap().disconnect(&b.id);
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while a.messaging.has_channel(&b.id) {
+        assert!(tokio::time::Instant::now() < deadline, "channel stayed");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let log = ChatLog::record(&a.messaging);
+    let peer = b.id.to_string();
+    let mut ids = Vec::new();
+    for body in ["one", "two"] {
+        let sent = crate::chat_cmd::send(&a.chat, &peer, body.into())
+            .await
+            .unwrap();
+        assert_eq!(sent.status, "pending");
+        ids.push(sent.id);
+    }
+
+    remove(&a.contacts, &a.state, &a.chat, &peer, None)
+        .await
+        .unwrap();
+    for id in &ids {
+        log.wait_status(id, "failed").await;
+    }
+    let page = crate::chat_cmd::history(&a.chat, &peer, None, None)
+        .await
+        .unwrap();
+    assert!(page.messages.iter().all(|m| m.status == "failed"));
 }
