@@ -51,6 +51,12 @@ pub fn new_message_id() -> MessageId {
     Uuid::new_v4()
 }
 
+/// Reads only an encoded [`Envelope`]'s `version`, without touching the
+/// payload, so a receiver can reject an unsupported version before decoding.
+pub fn peek_version(bytes: &[u8]) -> Option<u16> {
+    postcard::take_from_bytes::<u16>(bytes).ok().map(|(v, _)| v)
+}
+
 /// The top-level unit of exchange on the wire.
 ///
 /// Construct with [`Envelope::new`] so the current [`PROTOCOL_VERSION`] is
@@ -206,5 +212,24 @@ mod tests {
         // Still decodes structurally, but is flagged as unsupported.
         let decoded = Envelope::decode(&env.encode().unwrap()).unwrap();
         assert!(!decoded.is_supported());
+    }
+
+    #[test]
+    fn peek_version_reads_only_the_version() {
+        let env = Envelope {
+            version: 7,
+            payload: Payload::Ack(Ack {
+                id: new_message_id(),
+            }),
+        };
+        assert_eq!(peek_version(&env.encode().unwrap()), Some(7));
+        assert_eq!(peek_version(&[]), None);
+    }
+
+    #[test]
+    fn peek_version_of_unknown_payload_variant() {
+        let bytes = [0x01, 0x07, 0x00];
+        assert_eq!(peek_version(&bytes), Some(1));
+        assert!(Envelope::decode(&bytes).is_err());
     }
 }
