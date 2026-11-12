@@ -14,3 +14,4 @@
 pub mod contacts;
 pub mod discovery;
 pub mod identity;
+pub mod messaging;

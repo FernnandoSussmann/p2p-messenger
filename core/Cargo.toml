@@ -24,6 +24,7 @@ tempfile = { workspace = true, optional = true }
 protocol.workspace = true
 qrcode.workspace = true
 rand.workspace = true
+rusqlite.workspace = true
 
 [features]
 test-support = ["dep:tempfile"]

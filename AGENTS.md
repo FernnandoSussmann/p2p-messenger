@@ -17,8 +17,8 @@ Cargo workspace built from vertical feature slices.
 | Path             | Role                                                                          |
 | ---------------- | ----------------------------------------------------------------------------- |
 | `protocol/`      | Shared serde wire types (`Envelope`, `Payload`, …), `PROTOCOL_VERSION`, `ALPN`. Transport/UI-agnostic. |
-| `core/`          | UI-agnostic logic, one module per feature slice (currently `identity/`, `discovery/` and `contacts/`). Knows nothing about Tauri. |
-| `app/src-tauri/` | Thin Tauri shell: command handlers (`identity_cmd.rs`, `net_cmd.rs`, `contacts_cmd.rs`); shared test helpers in `test_util.rs` over `core`. |
+| `core/`          | UI-agnostic logic, one module per feature slice (currently `identity/`, `discovery/`, `contacts/` and `messaging/`). Knows nothing about Tauri. |
+| `app/src-tauri/` | Thin Tauri shell: command handlers (`identity_cmd.rs`, `net_cmd.rs`, `contacts_cmd.rs`, `chat_cmd.rs`); shared test helpers in `test_util.rs` over `core`. |
 | `headless/`      | **Test-only** headless node (`messenger-headless`) with a file-backed keyring (`FileKeychain`, unencrypted, throwaway identities) and a Unix-socket control surface; simulates devices at Level 3. Unix only. Never shipped; `app/` must never depend on or name it (pre-commit grep gate). |
 | `docker/`        | **Test-only** `headless.Dockerfile`, `compose.yaml` and `smoke.sh` (two isolated nodes; `docker/smoke.sh` is not part of the hook). No stability or security guarantees. |
 | `app/src/`       | Svelte frontend (`views/`, `lib/`), Vitest tests alongside (`*.test.ts`).     |
@@ -27,7 +27,8 @@ Cargo workspace built from vertical feature slices.
 Notes:
 - The package name `core` shadows std `core`; dependents import it with `package = "core"`.
 - Shared dependency versions live in the root `Cargo.toml` `[workspace.dependencies]`; member crates use `dep.workspace = true`.
-- `core` has a `test-support` feature exposing test doubles (e.g. `identity::testing`, `discovery::testing`, `contacts::testing`: `MemoryContactStore`, `FailingContactStore`, `RecordingHistoryEraser`, `BookCell`).
+- `core` has a `test-support` feature exposing test doubles (e.g. `identity::testing`, `discovery::testing`, `contacts::testing`: `MemoryContactStore`, `FailingContactStore`, `RecordingHistoryEraser`, `BookCell`; `messaging::testing`: `MemoryMessageStore`, `FailingMessageStore`, `ChatPeer`, `Faults`, `send_raw_frame`). Discovery exposes authorized channels to other slices only through `ChannelHandler`; messaging never dials.
+- Messages live in the SQLCipher `messenger.db` (DD-05 seam); never write bodies anywhere else.
 - Contacts are the single trust store (`ContactBook` implements `discovery::KnownPeers`); until DD-05 they live in plaintext `contacts.json`.
 
 ## Commands
@@ -70,7 +71,7 @@ fix the failure instead.
 
 ## Testing
 
-- Rust unit and integration tests: `core/tests/`, plus `#[cfg(test)]` modules; app-shell flow tests live in `app/src-tauri/` (e.g. `first_run_flow_end_to_end`, `ticket_connect_accept_flow_end_to_end`, `tests/pre_commit_hook.rs`). Level-1 two-node tests (real iroh endpoints on loopback, plus a relay-only canary capture) live in `core/tests/discovery_*.rs`.
+- Rust unit and integration tests: `core/tests/`, plus `#[cfg(test)]` modules; app-shell flow tests live in `app/src-tauri/` (e.g. `first_run_flow_end_to_end`, `ticket_connect_accept_flow_end_to_end`, `chat_flow_end_to_end`, `tests/pre_commit_hook.rs`). Level-1 two-node tests (real iroh endpoints on loopback, plus a relay-only canary capture) live in `core/tests/discovery_*.rs`; the Level-1 messaging engine tests live in `core/tests/messaging_*.rs`.
 - Frontend component tests: `app/src/**/*.test.ts`.
 - No Tauri WebDriver is available here, so GUI flows are covered at command-invoke and component level, plus the manual checklist in `README.md`. If you change the pre-commit hook, verify it by staging a file under `app/` containing a secret-looking identifier and confirming the commit is rejected.
 - Keychain-dependent tests should use the in-memory test doubles, not the real OS keychain.

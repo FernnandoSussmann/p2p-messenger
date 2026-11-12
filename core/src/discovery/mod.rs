@@ -8,6 +8,7 @@
 //! one goes through the same ticket dial and trust gate. [`event_json`] is the single mapping from a core
 //! event to its external name and JSON payload.
 
+mod channel;
 mod dto;
 mod events;
 mod flood;
@@ -17,6 +18,7 @@ mod lan;
 mod node;
 mod ticket_provider;
 
+pub use channel::{Channel, ChannelClosed, ChannelHandler};
 pub use dto::{
     event_json, ConnectionStateDto, IncomingRequestDto, LanPeerDto, MyTicketDto, PresenceDto,
 };

@@ -1,7 +1,12 @@
 # DD-04 — Messaging & Delivery
 
 **Feature slice:** `core::messaging` + `protocol` usage + `app` chat UI
-**Status:** Draft (v1)
+**Status:** Implemented (v1). Delivered choices: per-stream framing (no wire change,
+`PROTOCOL_VERSION` stays 1); history ordered by `(sent_at_ms, seq)` as written,
+accepting sender-clock placement; a targeted chat-text filter (`neutralize_chat_text`)
+instead of the strict display-name policy; `history_search` is shared with DD-05 and
+the encrypted message store is the DD-05 seam; no auto-dial, so the DD-02 follow-up
+is dialing contacts by NodeId.
 **Related:** [DD-02 Transport & Discovery](02-transport-discovery-and-connection.md),
 [DD-03 Contacts & Trust](03-contacts-and-trust.md),
 [DD-05 Storage & Logging](05-encrypted-storage-and-logging.md)
@@ -234,22 +239,22 @@ to hang offline queueing.
 
 ## Definition of done
 
-- [ ] Two online peers exchange multi-line/emoji UTF-8 text over the encrypted
+- [x] Two online peers exchange multi-line/emoji UTF-8 text over the encrypted
       channel, starting with the `Hello` exchange.
-- [ ] Each outgoing message shows Sending → Delivered (via `Ack`) or
+- [x] Each outgoing message shows Sending → Delivered (via `Ack`) or
       Pending/Failed, with status persisted (not just UI).
-- [ ] Receive is idempotent by `MessageId`; duplicates never double-store or
+- [x] Receive is idempotent by `MessageId`; duplicates never double-store or
       double-notify; lost acks are safely re-sent.
-- [ ] An in-memory outbox (backed by persisted rows) retries un-delivered
+- [x] An in-memory outbox (backed by persisted rows) retries un-delivered
       messages in-session and resumes after a channel restore; Failed messages
       can be manually resent with the same id.
-- [ ] All messages persist to the DD-05 encrypted history; scrollback is paged
+- [x] All messages persist to the DD-05 encrypted history; scrollback is paged
       and searchable.
-- [ ] No message content is ever logged or sent outside the encrypted channel;
+- [x] No message content is ever logged or sent outside the encrypted channel;
       only authorized peers can message.
-- [ ] Frame/body size and outbox bounds enforced; unsupported versions rejected;
+- [x] Frame/body size and outbox bounds enforced; unsupported versions rejected;
       inbound text rendered inert.
-- [ ] Model demonstrably leaves room for store-and-forward (status field +
+- [x] Model demonstrably leaves room for store-and-forward (status field +
       persisted outbox) without a schema break.
-- [ ] All tests above pass; `core::messaging` joins the workspace with real
+- [x] All tests above pass; `core::messaging` joins the workspace with real
       content only.

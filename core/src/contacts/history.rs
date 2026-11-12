@@ -27,10 +27,8 @@ impl fmt::Display for HistoryEraseError {
 
 impl std::error::Error for HistoryEraseError {}
 
-/// Production eraser until DD-04/DD-05 ship a message store. This build never
-/// persists a message, so a peer's history is always empty and erasing it is a
-/// successful no-op. This is the correct behaviour for a build without a
-/// message store, not a stub. DD-05 replaces this type in the app wiring.
+/// Eraser for builds that persist no messages (the headless node and tests).
+/// The desktop app uses `messaging::SqlCipherMessageStore`.
 pub struct NoMessageStore;
 
 impl HistoryEraser for NoMessageStore {

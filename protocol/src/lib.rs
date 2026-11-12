@@ -27,6 +27,19 @@ pub const ALPN: &[u8] = b"p2p-messenger/1";
 /// to 4 UTF-8 bytes each) fits with room to spare.
 pub const MAX_HELLO_BYTES: usize = 1024;
 
+/// Upper bound, in UTF-8 bytes, of a [`ChatMessage::body`]. Senders refuse to
+/// encode more; receivers reject more. Raising it is a breaking change for
+/// older receivers and requires a `PROTOCOL_VERSION` bump.
+pub const MAX_BODY_BYTES: usize = 16 * 1024;
+
+/// Upper bound, in bytes, of one encoded `Chat` envelope: `MAX_BODY_BYTES` plus
+/// the envelope overhead (version varint, variant tag, 16-byte id with length
+/// prefix, zig-zag `sent_at_ms`, body length varint) with headroom.
+pub const MAX_FRAME_BYTES: usize = MAX_BODY_BYTES + 64;
+
+/// Upper bound, in bytes, of an encoded `Ack` envelope.
+pub const MAX_ACK_BYTES: usize = 64;
+
 /// Stable, globally-unique identifier for a single chat message.
 ///
 /// Used to correlate a sent message with its [`Ack`] and to deduplicate on the
@@ -36,6 +49,12 @@ pub type MessageId = Uuid;
 /// Generate a fresh random [`MessageId`].
 pub fn new_message_id() -> MessageId {
     Uuid::new_v4()
+}
+
+/// Reads only an encoded [`Envelope`]'s `version`, without touching the
+/// payload, so a receiver can reject an unsupported version before decoding.
+pub fn peek_version(bytes: &[u8]) -> Option<u16> {
+    postcard::take_from_bytes::<u16>(bytes).ok().map(|(v, _)| v)
 }
 
 /// The top-level unit of exchange on the wire.
@@ -162,6 +181,27 @@ mod tests {
     }
 
     #[test]
+    fn max_body_chat_fits_within_max_frame_bytes() {
+        let env = Envelope::new(Payload::Chat(ChatMessage {
+            id: new_message_id(),
+            sent_at_ms: i64::MIN,
+            body: "😀".repeat(MAX_BODY_BYTES / 4),
+        }));
+        let bytes = env.encode().unwrap();
+        assert!(bytes.len() > MAX_BODY_BYTES);
+        assert!(bytes.len() <= MAX_FRAME_BYTES, "{} bytes", bytes.len());
+    }
+
+    #[test]
+    fn ack_fits_within_max_ack_bytes() {
+        let env = Envelope::new(Payload::Ack(Ack {
+            id: new_message_id(),
+        }));
+        let bytes = env.encode().unwrap();
+        assert!(bytes.len() <= MAX_ACK_BYTES, "{} bytes", bytes.len());
+    }
+
+    #[test]
     fn newer_protocol_version_is_rejected() {
         let env = Envelope {
             version: PROTOCOL_VERSION + 1,
@@ -172,5 +212,24 @@ mod tests {
         // Still decodes structurally, but is flagged as unsupported.
         let decoded = Envelope::decode(&env.encode().unwrap()).unwrap();
         assert!(!decoded.is_supported());
+    }
+
+    #[test]
+    fn peek_version_reads_only_the_version() {
+        let env = Envelope {
+            version: 7,
+            payload: Payload::Ack(Ack {
+                id: new_message_id(),
+            }),
+        };
+        assert_eq!(peek_version(&env.encode().unwrap()), Some(7));
+        assert_eq!(peek_version(&[]), None);
+    }
+
+    #[test]
+    fn peek_version_of_unknown_payload_variant() {
+        let bytes = [0x01, 0x07, 0x00];
+        assert_eq!(peek_version(&bytes), Some(1));
+        assert!(Envelope::decode(&bytes).is_err());
     }
 }

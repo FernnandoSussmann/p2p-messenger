@@ -1,5 +1,6 @@
 //! Diagnostics must never carry contact data: no `tracing` macro invocation in
-//! the contacts or discovery slices may mention names.
+//! the contacts or discovery slices may mention names, and none in the
+//! messaging slice may mention bodies, queries, bytes or keys.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -55,7 +56,13 @@ fn argument_text(src: &str, open: usize) -> &str {
     &src[open..]
 }
 
+const MESSAGING_FORBIDDEN: [&str; 5] = ["body", "query", "bytes", "key", "hex"];
+
 fn violations(src: &str) -> Vec<String> {
+    violations_for(src, &FORBIDDEN)
+}
+
+fn violations_for(src: &str, words: &[&str]) -> Vec<String> {
     let mut found = Vec::new();
     for mac in MACROS {
         for (at, _) in src.match_indices(mac) {
@@ -68,7 +75,7 @@ fn violations(src: &str) -> Vec<String> {
                 continue;
             }
             let args = argument_text(src, open);
-            for word in FORBIDDEN {
+            for word in words {
                 if args.contains(word) {
                     found.push(format!("{mac}{args} mentions `{word}`"));
                 }
@@ -84,6 +91,9 @@ fn guard_detects_violations() {
     assert!(!violations(r#"warn!("got {}", name.as_str())"#).is_empty());
     assert!(violations(r#"debug!(peer = %id.fmt_short(), "ok");"#).is_empty());
     assert!(violations(r#"let unwarn!(x) = nickname;"#).is_empty());
+    let body = r#"debug!(body = %m.body)"#;
+    assert!(!violations_for(body, &MESSAGING_FORBIDDEN).is_empty());
+    assert!(violations_for(r#"debug!(peer = %p.fmt_short())"#, &MESSAGING_FORBIDDEN).is_empty());
 }
 
 #[test]
@@ -98,6 +108,29 @@ fn contacts_and_discovery_never_log_names() {
         let src = fs::read_to_string(&file).unwrap();
         all.extend(
             violations(&src)
+                .into_iter()
+                .map(|v| format!("{}: {v}", file.display())),
+        );
+    }
+    assert!(all.is_empty(), "{all:#?}");
+}
+
+#[test]
+fn messaging_never_logs_bodies_or_secrets() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/messaging");
+    let mut files = Vec::new();
+    rust_files(&root, &mut files);
+    assert!(!files.is_empty());
+    let words: Vec<&str> = FORBIDDEN
+        .iter()
+        .chain(&MESSAGING_FORBIDDEN)
+        .copied()
+        .collect();
+    let mut all = Vec::new();
+    for file in files {
+        let src = fs::read_to_string(&file).unwrap();
+        all.extend(
+            violations_for(&src, &words)
                 .into_iter()
                 .map(|v| format!("{}: {v}", file.display())),
         );
