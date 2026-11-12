@@ -57,7 +57,9 @@ Trust rule: trust is the peer's NodeId, kept as a contact.
 - A peer you dial is remembered once it replies with a valid Hello, as an
   Unverified contact named after what it calls itself, or "Peer <id>". It may
   later connect to you without a prompt.
-- Later name changes by the peer never change your nickname.
+- The default nickname is a snapshot taken when the contact is created; later
+  name changes by the peer never change your nickname.
+- Two contacts may share a nickname; the NodeId tells them apart.
 - Declined or expired requests leave no trace.
 - Contacts are kept per account in `contacts.json` **in plaintext (nicknames
   included) until DD-05's encrypted DB replaces it**.

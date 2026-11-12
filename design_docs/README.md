@@ -43,7 +43,8 @@ Svelte UI for one coherent feature.
 
 ## Status
 
-All five docs are v1 drafts targeting the desktop build (Linux/macOS/Windows).
+All five docs are v1 drafts targeting the desktop build (Linux/macOS/Windows);
+DD-03 is implemented, with the deviations listed in its Status line.
 Mobile/web, attachments, offline store-and-forward, QR *scanning*, multiple
 identities, passphrase-at-rest, and multi-device sync are **out of scope** for
 v1 (see each doc's non-goals).
