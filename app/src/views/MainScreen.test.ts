@@ -15,18 +15,48 @@ vi.mock("../net", async (orig) => ({
   netMyTicket: vi.fn(),
   netPendingIncoming: vi.fn(),
 }));
+const unlistenContacts = vi.fn();
+const namingQueue = vi.hoisted(() => {
+  let value: unknown[] = [];
+  const subs = new Set<(v: unknown[]) => void>();
+  return {
+    subscribe(fn: (v: unknown[]) => void) {
+      subs.add(fn);
+      fn(value);
+      return () => subs.delete(fn);
+    },
+    set(v: unknown[]) {
+      value = v;
+      subs.forEach((f) => f(v));
+    },
+  };
+});
+vi.mock("../lib/contactsStore", async () => {
+  const { writable } = await import("svelte/store");
+  return {
+    contacts: writable([]),
+    contactsError: writable(null),
+    namingQueue,
+    dropNaming: vi.fn(),
+    refreshContacts: vi.fn(async () => {}),
+    startContacts: vi.fn(async () => unlistenContacts),
+  };
+});
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 
 import MainScreen from "./MainScreen.svelte";
 import { activeTab } from "../lib/router";
 import { incomingRequests, connections } from "../lib/netStore";
+import { startContacts } from "../lib/contactsStore";
 import { identityMyInfo } from "../identity";
 import { netMyTicket, netPendingIncoming } from "../net";
 
 afterEach(cleanup);
 beforeEach(() => {
   unlisten.mockClear();
-  activeTab.set("my-info");
+  unlistenContacts.mockClear();
+  activeTab.set("contacts");
+  namingQueue.set([]);
   incomingRequests.set([]);
   connections.set({});
   vi.mocked(identityMyInfo).mockResolvedValue({
@@ -40,8 +70,24 @@ beforeEach(() => {
 });
 
 describe("MainScreen", () => {
-  it("lists both tabs and switches between them", async () => {
+  it("Contacts is the first and default tab", () => {
     render(MainScreen);
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((t) => t.textContent)).toEqual(["Contacts", "My Info", "Network"]);
+    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("heading", { name: "Contacts" })).toBeTruthy();
+  });
+
+  it("starts and stops the contacts listener", async () => {
+    const { unmount } = render(MainScreen);
+    await waitFor(() => expect(startContacts).toHaveBeenCalled());
+    unmount();
+    await waitFor(() => expect(unlistenContacts).toHaveBeenCalled());
+  });
+
+  it("lists all tabs and switches between them", async () => {
+    render(MainScreen);
+    await fireEvent.click(screen.getByRole("tab", { name: "My Info" }));
     expect(screen.getByRole("tab", { name: "My Info" })).toBeTruthy();
     await fireEvent.click(screen.getByRole("tab", { name: "Network" }));
     expect(screen.getByLabelText("Connect by ticket")).toBeTruthy();
@@ -57,6 +103,16 @@ describe("MainScreen", () => {
     await fireEvent.click(screen.getByRole("tab", { name: "Network" }));
     expect(screen.getByRole("button", { name: /Accept/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
+  });
+
+  it("naming prompt is shown on every tab", async () => {
+    namingQueue.set([{ node_id: "peer-9", self_name: "Eve", nickname: "Eve" }]);
+    render(MainScreen);
+    expect(await screen.findByTestId("naming-prompt")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("tab", { name: "Network" }));
+    expect(screen.getByTestId("naming-prompt")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("tab", { name: "My Info" }));
+    expect(screen.getByTestId("naming-prompt")).toBeTruthy();
   });
 
   it("runs the net event unlisteners on unmount", async () => {

@@ -44,6 +44,9 @@ create a real identity.
    device**.
 3. Device A shows an Accept/Decline prompt marked **Unverified** (the name is
    self-asserted; trust is the NodeId). Accept, and both sides show Connected.
+4. Once A accepts, device B shows a **Name this contact** prompt prefilled
+   with the name A gave (editable). **Save** keeps or renames the contact;
+   **Not now** keeps it under the prefilled name.
 
 Trust rule: trust is the peer's NodeId, kept as a contact.
 
@@ -70,12 +73,34 @@ unset, and My Info asks for a new one.
 NAT traversal (hole punching, relay fallback) is provided by iroh; this app
 adds no traversal logic of its own. Relays only ever carry ciphertext.
 
-### Peers on this network, presence and relay
+### Contacts
 
-The **Network** tab lists peers found on the local network via mDNS. Entries are
-always marked **Unverified**: the name is self-asserted, only the NodeId counts.
-Picking one runs the same connect and Accept/Decline gate as a pasted ticket.
-Discovered peers are kept in memory only, never on disk.
+**Contacts** is the default tab. Each row shows only your own nickname (bold),
+with the NodeId small and gray beneath it. What a peer calls itself appears only
+in the Accept, naming and rename prompts, never in the list.
+
+- **Unverified** vs **Verified by you**: the latter is your own attestation
+  (**Mark verified…**, undo with **Mark unverified**). The app does not check it
+  cryptographically.
+- **Rename** changes only your nickname. **Connect** appears for contacts
+  currently on the local network; they reconnect without a prompt.
+- Names may contain emoji sequences (👨‍👩‍👧, 🏳️‍🌈, 🏴󠁧󠁢󠁥󠁮󠁧󠁿) but not stray
+  zero-width characters.
+- **Remove…** always removes trust and closes any open connection, so their
+  next connect prompts again. Your message history is deleted only if you tick
+  "Also delete our message history" (off by default). No message store exists
+  yet, so there is nothing to delete until DD-04/DD-05.
+- Copying a NodeId: choose **Show full NodeId**, select it and use your
+  system's copy shortcut.
+- Contacts are stored in plaintext until DD-05.
+
+### On this network, presence and relay
+
+**Contacts → On this network** lists non-contact peers found via mDNS. Entries
+are always marked **Unverified**: the name is self-asserted, only the NodeId
+counts. **Add…** asks for your nickname, saves the contact and connects; the
+other side gets the Accept/Decline prompt. Discovered peers are kept in memory
+only, never on disk.
 
 **Visible on this network** (default on, saved per account) controls only
 whether *you* advertise on the LAN. Off hides you from other devices' LAN lists
@@ -144,13 +169,30 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
    After upgrading a profile that has a `known_peers.json`, a previously
    accepted peer still connects without a prompt.
 9. Two instances (see Two-device simulation): each appears in the other's
-   Peers on this network list as Unverified, with its full NodeId. Connect from
-   the list: the other side gets the Accept/Decline prompt.
+   Contacts → On this network list as Unverified, with its full NodeId. Add…
+   it: it becomes a contact, connects, and the other side gets the prompt.
 10. Turn Visible on this network off: the peer disappears from the other
     list within seconds, the other still shows in yours, and a ticket connect
     to you still works. Turn it on: you reappear with your current name.
 11. Rename yourself while visible: the other instance shows the new name.
-12. `MESSENGER_PROFILE=../x` or `MESSENGER_RELAY_URL=bad` refuses to start.
+12. Contacts is the default tab; the empty state shows with no contacts.
+13. The Accept prompt's nickname is prefilled with their name (or "Peer <id>") and is editable; clearing it disables Accept. After Accept, the row shows only the bold nickname, the gray truncated
+    NodeId and Unverified; the peer's own name is not in the row. Hovering shows
+    the full NodeId; Show full NodeId reveals selectable text and Ctrl/Cmd+C
+    copies it.
+14. Ticket connect: once the other side accepts, the naming prompt appears
+    prefilled with their name. Not now leaves them in Contacts as Unverified
+    under that name.
+15. Rename changes only the nickname. Mark verified shows the honest dialog and
+    the badge reads "Verified by you"; Mark unverified reverts it.
+16. Remove: the checkbox is unchecked by default and both outcomes are shown.
+    After removal the connection drops and the peer's next connect prompts.
+17. The peer renames itself and reconnects: your nickname for them is unchanged.
+18. Reconnect silently: quit and relaunch both instances. On B, open Contacts;
+    A's row shows Connect. Click it: A shows no Accept prompt and both show
+    Connected under Network → Connections. Repeat by pasting A's ticket into B's
+    Network tab, again with no prompt on A.
+19. `MESSENGER_PROFILE=../x` or `MESSENGER_RELAY_URL=bad` refuses to start.
 
 ## Two-device simulation
 
@@ -180,7 +222,7 @@ cargo build -p app                                 # once, if target/debug/app i
 MESSENGER_PROFILE=b ./target/debug/app             # terminal 2: instance B
 ```
 
-Then: complete first-run on each, find the other in **Peers on this network**
+Then: complete first-run on each, find the other in **Contacts → On this network**
 (or paste its ticket), Accept on the other side, see Connected, then turn
 **Visible on this network** off on one: it vanishes from the other's list but
 can still be connected to by ticket.

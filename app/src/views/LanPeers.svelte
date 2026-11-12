@@ -1,37 +1,69 @@
 <script lang="ts">
   import { lanPeers } from "../lib/netStore";
+  import { contactIds, refreshContacts } from "../lib/contactsStore";
+  import { contactsAdd, describeContactsError } from "../contacts";
   import { netConnectTicket, describeNetError } from "../net";
+  import type { LanPeerDto } from "../net";
+  import NicknameForm from "./NicknameForm.svelte";
+  import NodeIdLine from "./NodeIdLine.svelte";
+  import TrustBadge from "./TrustBadge.svelte";
 
+  let adding = $state<string | null>(null);
+  let busy = $state(false);
   let error = $state<string | null>(null);
-  let pending = $state<string | null>(null);
 
-  async function connect(nodeId: string, ticket: string) {
+  const others = $derived($lanPeers.filter((p) => !$contactIds.has(p.node_id)));
+
+  function open(id: string) {
+    adding = id;
     error = null;
-    pending = nodeId;
+  }
+
+  async function add(peer: LanPeerDto, nickname: string) {
+    error = null;
+    busy = true;
     try {
-      await netConnectTicket(ticket);
-    } catch (e) {
-      error = describeNetError(e);
+      try {
+        await contactsAdd(peer.node_id, nickname);
+      } catch (e) {
+        error = describeContactsError(e);
+        return;
+      }
+      await refreshContacts();
+      adding = null;
+      try {
+        await netConnectTicket(peer.ticket);
+      } catch (e) {
+        error = `Added “${nickname}”, but connecting failed: ${describeNetError(e)}`;
+      }
     } finally {
-      pending = null;
+      busy = false;
     }
   }
 </script>
 
 <section>
-  <h3>Peers on this network</h3>
-  {#if $lanPeers.length === 0}
-    <p>No peers found on this network.</p>
+  <h3>On this network</h3>
+  <p>People nearby announcing themselves. Names are chosen by them and are not verified.</p>
+  {#if others.length === 0}
+    <p>No one new on this network.</p>
   {:else}
     <ul>
-      {#each $lanPeers as peer (peer.node_id)}
+      {#each others as peer (peer.node_id)}
         <li data-testid="lan-peer">
-          <span data-testid="lan-peer-name">{peer.display_name ?? "(no name)"}</span>
-          {#if !peer.verified}<span data-testid="lan-peer-unverified">Unverified</span>{/if}
-          <small style="color: gray; word-break: break-all" data-testid="lan-peer-id">{peer.node_id}</small>
-          <button type="button" disabled={pending === peer.node_id} onclick={() => connect(peer.node_id, peer.ticket)}>
-            Connect
-          </button>
+          <TrustBadge verified={false} />
+          {#if peer.display_name}calls themselves “<bdi data-testid="lan-peer-name">{peer.display_name}</bdi>”{:else}<span data-testid="lan-peer-name">(no name)</span>{/if}
+          <NodeIdLine nodeId={peer.node_id} />
+          <button type="button" disabled={busy} onclick={() => open(peer.node_id)}>Add…</button>
+          {#if adding === peer.node_id}
+            <NicknameForm
+              selfName={peer.display_name}
+              submitLabel="Add contact and connect"
+              {busy}
+              onSubmit={(n) => add(peer, n)}
+              onCancel={() => (adding = null)}
+            />
+          {/if}
         </li>
       {/each}
     </ul>
