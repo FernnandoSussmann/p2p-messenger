@@ -16,6 +16,7 @@ use std::time::Duration;
 use messenger_core::contacts::{migrate_legacy_known_peers, FileContactStore};
 use messenger_core::discovery::LiveTicketProvider;
 use messenger_core::identity::{FileSettingsStore, IdentityService, IdentityStatus, OsKeychain};
+use messenger_core::logging::{self, LogConfig};
 use messenger_core::storage::Storage;
 use tauri::{Manager, RunEvent};
 
@@ -48,7 +49,15 @@ pub fn run() {
             )
             .map_err(|e| format!("invalid profile: {e}"))?;
             let relay = relay_override_from_env(std::env::var("MESSENGER_RELAY_URL").ok())?;
-            let layout = profile::layout(&app.path().app_data_dir()?, profile);
+            let layout =
+                profile::layout(&app.path().app_data_dir()?, &app.path().app_log_dir()?, profile);
+            let level = logging::level_from_env(std::env::var("MESSENGER_LOG").ok().as_deref())?;
+            if logging::init(&LogConfig::new(layout.log_dir, level)).is_err() {
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stderr(),
+                    b"p2p-messenger: diagnostic log file unavailable; continuing without file logging\n",
+                );
+            }
             let data_dir = layout.data_dir;
             std::fs::create_dir_all(&data_dir)?;
             #[cfg(unix)]
@@ -58,14 +67,13 @@ pub fn run() {
                     .map_err(|e| format!("cannot restrict app data directory permissions: {e}"))?;
             }
             let contacts_store = Arc::new(FileContactStore::new(data_dir.clone()));
-            // The app crate has no tracing dependency; counts only, never names.
             match migrate_legacy_known_peers(&data_dir, contacts_store.as_ref()) {
                 Ok(r) if r.migrated > 0 => {
-                    eprintln!("migrated {} known peers to contacts", r.migrated);
+                    tracing::info!(count = r.migrated, "legacy known peers migrated");
                 }
                 Ok(_) => {}
                 Err(_) => {
-                    eprintln!("legacy known peers not migrated; those peers will be prompted again")
+                    tracing::warn!("legacy known peers not migrated; those peers will be prompted again")
                 }
             }
             let chat_state = Arc::new(ChatState::new());
