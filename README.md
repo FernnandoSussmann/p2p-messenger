@@ -105,6 +105,30 @@ Messages live in `messenger.db` in the (profile) data directory, encrypted with
 SQLCipher under the database key held in your OS keychain. A wrong key or a
 corrupt file is reported, and the file is never reset or recreated.
 
+### Chat
+
+Open **Contacts**, then a contact row's **Message** button. **Back** (or any tab)
+returns to the tabs; an unread count shows on the button while the chat is closed.
+Commands: `chat_send`, `chat_resend`, `chat_history` and `history_search`; events:
+`message_received`, `message_status` and `chat_resync`.
+
+- Status: **Sending**, **Delivered**, **Pending** (waits for a connection and is
+  retried this session, and again after a restart) and **Not delivered** with a
+  **Resend** button.
+- Removing a contact marks its waiting messages Not delivered.
+- Delivery needs both peers online: there is no store-and-forward and no
+  automatic dialing in v1. A Pending message goes out once you connect again.
+- A message is limited to 16 KiB (UTF-8 bytes). Ctrl/Cmd+Enter sends; Enter
+  inserts a newline.
+- Messages are ordered by the sender's clock, then by arrival, so a wrong clock
+  on the other side can misplace their messages. Times are shown in your local
+  time zone.
+- Text is shown literally: no links or formatting, and hidden direction,
+  zero-width or control characters show as �.
+- Search within a conversation finds words in its history. History and search
+  read the encrypted store, so they work even if the node failed to start.
+  Storage is `messenger.db` (see Message storage).
+
 ### On this network, presence and relay
 
 **Contacts → On this network** lists non-contact peers found via mDNS. Entries
@@ -159,7 +183,8 @@ changing the hook.
 No Tauri WebDriver driver is available in this environment, so the first-run
 flow is automated at command-invoke level (`first_run_flow_end_to_end` in
 `app/src-tauri/src/identity_cmd.rs`, `ticket_connect_accept_flow_end_to_end` in
-`app/src-tauri/src/net_cmd.rs`) and component level (vitest). Check by
+`app/src-tauri/src/net_cmd.rs`, `chat_flow_end_to_end` in
+`app/src-tauri/src/chat_cmd.rs`) and component level (vitest). Check by
 hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 
 1. First launch shows the wizard; empty or whitespace names are rejected.
@@ -204,6 +229,27 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
     Connected under Network → Connections. Repeat by pasting A's ticket into B's
     Network tab, again with no prompt on A.
 19. `MESSENGER_PROFILE=../x` or `MESSENGER_RELAY_URL=bad` refuses to start.
+20. Contacts -> **Message** opens the chat. **Back**, or any tab, returns to the tabs.
+21. With both instances connected, multi-line + emoji text arrives once. The
+    sender shows Sending -> Delivered, and times are local.
+22. Quit B and send from A: the message is **Pending**, and the not-connected
+    note explains the reconnect. Relaunch B and Connect: it becomes Delivered,
+    and B shows it once.
+23. An unread count appears on B's Message button while B's chat is closed, and
+    clears when the chat opens.
+24. Send `<b>x</b>`, `**x**`, `https://example.com`, a text containing U+202E,
+    and a Persian word containing ZWNJ. All appear literally and nothing is
+    clickable. The U+202E shows as �, and the Persian word renders correctly.
+25. Restart A: the history reloads with its persisted statuses, the newest is at
+    the bottom, and **Load older** pages back.
+26. Search in the chat finds a word, and only from this conversation.
+27. Remove the contact with "Also delete our message history", then re-add it:
+    the chat is empty. Without the option, the history remains. Queued Pending
+    messages for a removed contact show Not delivered.
+28. Empty or whitespace input keeps Send disabled. A paste over 16 KiB disables
+    Send and shows the counter.
+29. `grep -c "<a word you sent>" <profile data dir>/messenger.db` returns 0 (the
+    file is encrypted).
 
 ## Two-device simulation
 
