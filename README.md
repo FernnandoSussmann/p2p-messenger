@@ -184,7 +184,7 @@ No Tauri WebDriver driver is available in this environment, so the first-run
 flow is automated at command-invoke level (`first_run_flow_end_to_end` in
 `app/src-tauri/src/identity_cmd.rs`, `ticket_connect_accept_flow_end_to_end` in
 `app/src-tauri/src/net_cmd.rs`, `chat_flow_end_to_end` in
-`app/src-tauri/src/chat_cmd.rs`) and component level (vitest). Check by
+`app/src-tauri/src/chat_cmd/tests.rs`) and component level (vitest). Check by
 hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 
 1. First launch shows the wizard; empty or whitespace names are rejected.
