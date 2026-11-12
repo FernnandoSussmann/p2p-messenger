@@ -10,9 +10,10 @@ use messenger_core::discovery::testing::{
 };
 use messenger_core::discovery::{ConnectionState, Direction, KnownPeers, NetEvent};
 use messenger_core::identity::testing::FakeKeychain;
-use messenger_core::identity::NodeId;
+use messenger_core::identity::{read_marker, NodeId};
 use messenger_core::messaging::testing::Faults;
 use messenger_core::messaging::{Messaging, MessagingConfig};
+use messenger_core::storage::Storage;
 use serde_json::Value;
 use tokio::sync::broadcast::Receiver;
 
@@ -116,7 +117,10 @@ pub async fn started_with_chat(name: &str) -> StartedChat {
     let state = NetState::default();
     let node = rest.node;
     assert!(state.ensure_started_with(async { Ok(node) }).await.unwrap());
-    chat.open_store(&rest.identity).expect("open store");
+    let account = read_marker(rest.dir.path()).unwrap().expect("provisioned");
+    let storage = Storage::new(rest.dir.path(), rest.keychain.clone());
+    storage.database_creating(&account).expect("create store");
+    chat.open_store(&storage, &account).expect("open store");
     let config = MessagingConfig::fast();
     let faults = config.faults.clone();
     let book = contacts.book().expect("contacts are bound");

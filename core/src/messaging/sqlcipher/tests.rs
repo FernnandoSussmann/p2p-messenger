@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use protocol::{new_message_id, ChatMessage, MAX_BODY_BYTES};
 
 use super::*;
-use crate::identity::testing::FakeKeychain;
-use crate::identity::{MemorySettingsStore, NodeIdTicketProvider};
+use crate::identity::{AccountId, DbKey};
 use crate::messaging::contract::{chat, contract_suite, node};
+use crate::storage::{Create, Database, DB_FILE, MIGRATIONS};
 
 fn key() -> DbKey {
     DbKey::from_bytes(rand::random::<[u8; 32]>())
@@ -17,7 +17,8 @@ fn db_path(dir: &tempfile::TempDir) -> PathBuf {
 }
 
 fn open(dir: &tempfile::TempDir, key: &DbKey) -> SqlCipherMessageStore {
-    SqlCipherMessageStore::open_with_key(&db_path(dir), key).unwrap()
+    let db = Database::open(&db_path(dir), key, MIGRATIONS, Create::Allowed).unwrap();
+    SqlCipherMessageStore::new(Arc::new(db))
 }
 
 fn canary() -> String {
@@ -61,38 +62,6 @@ fn sqlcipher_store_meets_contract() {
 }
 
 #[test]
-fn sqlcipher_reports_cipher_version() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = open(&dir, &key());
-    let version: String = store
-        .conn()
-        .unwrap()
-        .query_row("PRAGMA cipher_version", [], |r| r.get(0))
-        .unwrap();
-    assert!(!version.is_empty());
-}
-
-#[test]
-fn fts5_trigram_is_available() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = open(&dir, &key());
-    let conn = store.conn().unwrap();
-    conn.execute_batch(
-        "CREATE VIRTUAL TABLE temp.t USING fts5 (x, tokenize = 'trigram');
-         INSERT INTO temp.t (x) VALUES ('hello world');",
-    )
-    .unwrap();
-    let hits: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM temp.t WHERE t MATCH '\"lo wo\"'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(hits, 1);
-}
-
-#[test]
 fn reopen_with_same_key_reads_rows() {
     let dir = tempfile::tempdir().unwrap();
     let (k, account, peer) = (key(), AccountId::new(), node());
@@ -113,48 +82,6 @@ fn reopen_with_same_key_reads_rows() {
         store.search(&account, None, "persisted", 10).unwrap().len(),
         1
     );
-}
-
-#[test]
-fn wrong_key_is_reported_and_file_untouched() {
-    let dir = tempfile::tempdir().unwrap();
-    let (account, peer) = (AccountId::new(), node());
-    open(&dir, &key())
-        .insert_outgoing(&account, &peer, &chat(1, "x"), MessageStatus::Sending)
-        .unwrap();
-    let before = fs::read(db_path(&dir)).unwrap();
-    let err = SqlCipherMessageStore::open_with_key(&db_path(&dir), &key())
-        .err()
-        .unwrap();
-    assert_eq!(err, MessageStoreError::WrongKeyOrCorrupt);
-    assert_eq!(fs::read(db_path(&dir)).unwrap(), before);
-}
-
-#[test]
-fn garbage_file_is_reported_and_left_in_place() {
-    let dir = tempfile::tempdir().unwrap();
-    let garbage = rand::random::<[u8; 64]>().repeat(64);
-    fs::write(db_path(&dir), &garbage).unwrap();
-    let err = SqlCipherMessageStore::open_with_key(&db_path(&dir), &key())
-        .err()
-        .unwrap();
-    assert_eq!(err, MessageStoreError::WrongKeyOrCorrupt);
-    assert_eq!(fs::read(db_path(&dir)).unwrap(), garbage);
-}
-
-#[test]
-fn newer_schema_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let k = key();
-    open(&dir, &k)
-        .conn()
-        .unwrap()
-        .execute_batch("PRAGMA user_version = 2;")
-        .unwrap();
-    let err = SqlCipherMessageStore::open_with_key(&db_path(&dir), &k)
-        .err()
-        .unwrap();
-    assert_eq!(err, MessageStoreError::NewerSchema);
 }
 
 #[test]
@@ -245,6 +172,8 @@ fn erase_leaves_no_plaintext_in_export() {
     store.erase_peer_history(&account, &gone).unwrap();
 
     let export = dir.path().join("export.plain");
+    // The connection is opened without SQLITE_OPEN_CREATE, so ATTACH needs the file.
+    fs::write(&export, b"").unwrap();
     {
         let conn = store.conn().unwrap();
         conn.execute(
@@ -259,16 +188,6 @@ fn erase_leaves_no_plaintext_in_export() {
     let plain = fs::read(&export).unwrap();
     assert!(contains(&plain, control.as_bytes()));
     assert!(!contains(&plain, secret.as_bytes()));
-}
-
-#[cfg(unix)]
-#[test]
-fn db_file_is_private() {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().unwrap();
-    open(&dir, &key());
-    let mode = fs::metadata(db_path(&dir)).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o600);
 }
 
 #[test]
@@ -296,50 +215,4 @@ fn insert_rejects_empty_and_oversized_bodies() {
         .insert_outgoing(&account, &peer, &exact, MessageStatus::Sending)
         .unwrap();
     assert_eq!(store.page(&account, &peer, None, 10).unwrap().len(), 1);
-}
-
-#[test]
-fn store_errors_never_embed_details() {
-    let dir = tempfile::tempdir().unwrap();
-    let path_text = dir.path().to_string_lossy().into_owned();
-    let k = key();
-    open(&dir, &k);
-    let err = SqlCipherMessageStore::open_with_key(&db_path(&dir), &key())
-        .err()
-        .unwrap();
-    for e in [
-        err,
-        MessageStoreError::Unavailable,
-        MessageStoreError::NewerSchema,
-        MessageStoreError::NotEncrypted,
-        MessageStoreError::AlreadyExists,
-        MessageStoreError::InvalidBody,
-        MessageStoreError::InvalidQuery,
-    ] {
-        for shown in [e.to_string(), format!("{e:?}")] {
-            assert!(!shown.contains(&path_text));
-            assert!(!shown.contains(DB_FILE));
-            assert!(!shown.contains('/'));
-        }
-    }
-}
-
-#[test]
-fn open_message_store_uses_the_identity_data_dir() {
-    let dir = tempfile::tempdir().unwrap();
-    let identity = IdentityService::new(
-        FakeKeychain::new(),
-        MemorySettingsStore::new(),
-        NodeIdTicketProvider,
-        dir.path(),
-    );
-    assert_eq!(
-        open_message_store(&identity).err(),
-        Some(MessageStoreError::Unavailable)
-    );
-    assert!(!db_path(&dir).exists());
-    let provisioned = identity.provision().unwrap();
-    let (account, _) = open_message_store(&identity).unwrap();
-    assert_eq!(account, provisioned.account_id);
-    assert!(db_path(&dir).exists());
 }

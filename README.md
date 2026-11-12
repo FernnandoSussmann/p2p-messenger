@@ -16,7 +16,7 @@ only once they carry real code — no empty stubs or placeholder modules.
 | Crate      | Status  | Responsibility                                               |
 | ---------- | ------- | ------------------------------------------------------------ |
 | `protocol` | present | Shared serde wire types (`Envelope`, `Payload`, …) + version |
-| `core`     | present | UI-agnostic logic by slices: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence) and `contacts` (contact book, trust, interim store) and `messaging` (encrypted message store and delivery engine) |
+| `core`     | present | UI-agnostic logic by slices: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence) and `contacts` (contact book, trust, interim store) and `messaging` (message store and delivery engine) and `storage` (the single encrypted `messenger.db`: keyed open, typed errors, migrations) |
 | `app`      | present | Thin Tauri v2 + Svelte shell over `core`                     |
 | `headless` | present | Test-only headless node + file keyring for Level-3 simulation; never shipped, never used by `app` |
 
@@ -102,8 +102,17 @@ in the Accept, naming and rename prompts, never in the list.
 ### Message storage
 
 Messages live in `messenger.db` in the (profile) data directory, encrypted with
-SQLCipher under the database key held in your OS keychain. A wrong key or a
-corrupt file is reported, and the file is never reset or recreated.
+SQLCipher under the database key held in your OS keychain. The `storage` slice
+opens it, runs an integrity check, and applies forward-only, transactional
+schema migrations (the messages table is migration 1).
+
+If the database cannot be opened (wrong or missing key, damaged file, newer
+schema, failed migration, or the file is missing while an identity exists), the
+app shows **Encrypted storage unavailable** with a **Retry** button, and
+networking stays down until it opens. The file is never reset, deleted or
+recreated, and there is no "reset database" action. A missing file is
+recreated only during first-run provisioning or while importing legacy
+plaintext data.
 
 ### Chat
 
@@ -250,6 +259,13 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
     Send and shows the counter.
 29. `grep -c "<a word you sent>" <profile data dir>/messenger.db` returns 0 (the
     file is encrypted).
+30. Quit, then `head -c 8192 /dev/urandom > <profile data dir>/messenger.db`
+    (after copying the real file aside) and launch: **Encrypted storage
+    unavailable** shows, the file is untouched, and after restoring the backup
+    copy **Retry** returns to the main screen.
+31. Quit and move `messenger.db` away from a profile that has an identity, then
+    launch: the same screen shows with the "missing" reason and no new
+    `messenger.db` is created. Move it back and **Retry**.
 
 ## Two-device simulation
 

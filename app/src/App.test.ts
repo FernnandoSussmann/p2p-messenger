@@ -12,6 +12,12 @@ vi.mock("./identity", () => ({
   identitySetDisplayName: (n: string) => setName(n),
   describeError: () => "boom",
 }));
+const storage = vi.fn();
+const storageRetry = vi.fn();
+vi.mock("./storage", () => ({
+  storageStatus: () => storage(),
+  storageRetry: () => storageRetry(),
+}));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 
@@ -26,8 +32,9 @@ import App from "./App.svelte";
 
 describe("App view machine", () => {
   beforeEach(() => {
-    for (const m of [status, myInfo, provision, setName]) m.mockReset();
+    for (const m of [status, myInfo, provision, setName, storage, storageRetry]) m.mockReset();
     myInfo.mockResolvedValue(info("Ada"));
+    storage.mockResolvedValue({ type: "Ready" });
   });
   afterEach(cleanup);
 
@@ -75,5 +82,40 @@ describe("App view machine", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(setName).toHaveBeenCalledWith("Bob"));
     expect(provision).not.toHaveBeenCalled();
+  });
+
+  it("shows the storage screen, not main, when the store is unavailable", async () => {
+    status.mockResolvedValue({ type: "Present", account_id: "a", node_id: "n" });
+    storage.mockResolvedValue({ type: "Error", kind: "Missing", reason: "db is gone" });
+    render(App);
+    await screen.findByText("Encrypted storage unavailable");
+    expect(screen.getByText("db is gone")).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "My Info" })).toBeNull();
+  });
+
+  it("Retry leading to Ready shows main", async () => {
+    status.mockResolvedValue({ type: "Present", account_id: "a", node_id: "n" });
+    storage.mockResolvedValue({ type: "Error", kind: "Missing", reason: "db is gone" });
+    render(App);
+    await screen.findByText("Encrypted storage unavailable");
+    storage.mockResolvedValue({ type: "Ready" });
+    storageRetry.mockResolvedValue({ type: "Ready" });
+    await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByRole("tab", { name: "My Info" });
+  });
+
+  it("re-checks storage when the wizard finishes", async () => {
+    status.mockResolvedValue({ type: "Absent" });
+    provision.mockResolvedValue({ node_id: "n", account_id: "a" });
+    setName.mockResolvedValue(undefined);
+    render(App);
+    await fireEvent.click(await screen.findByRole("button", { name: "Create identity" }));
+    const input = await screen.findByLabelText("Display name");
+    status.mockResolvedValue({ type: "Present", account_id: "a", node_id: "n" });
+    storage.mockResolvedValue({ type: "Error", kind: "Io", reason: "no access" });
+    await fireEvent.input(input, { target: { value: "Ada" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByText("Encrypted storage unavailable");
+    expect(screen.getByText("no access")).toBeTruthy();
   });
 });

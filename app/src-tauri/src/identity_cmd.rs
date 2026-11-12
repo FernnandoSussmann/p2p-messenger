@@ -13,13 +13,16 @@ use messenger_core::identity::{
     MarkerError, MyInfoError, OsKeychain, ProvisionError, SetNameError, SettingsStore, StatusError,
     TicketProvider,
 };
+use messenger_core::storage::Storage;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
+use crate::chat_cmd::ChatState;
 use crate::net_cmd;
+use crate::storage_cmd;
 
 /// The service as wired by the app.
-pub type AppIdentity = IdentityService<OsKeychain, Arc<FileSettingsStore>, LiveTicketProvider>;
+pub type AppIdentity = IdentityService<Arc<OsKeychain>, Arc<FileSettingsStore>, LiveTicketProvider>;
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
@@ -190,8 +193,15 @@ pub fn identity_status(service: State<'_, AppIdentity>) -> StatusDto {
 pub fn identity_provision(
     app: AppHandle,
     service: State<'_, AppIdentity>,
+    storage: State<'_, Arc<Storage>>,
+    chat: State<'_, Arc<ChatState>>,
 ) -> Result<ProvisionDto, IdentityCmdError> {
     let provisioned = provision(&service)?;
+    // Decide the storage state before the node starts; the wizard then shows a
+    // failure through `storage_status`.
+    if let IdentityStatus::Present { account_id, .. } = service.status() {
+        let _ = storage_cmd::open_for(&storage, &chat, &account_id);
+    }
     net_cmd::ensure_started(&app);
     Ok(provisioned)
 }
