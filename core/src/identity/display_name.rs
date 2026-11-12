@@ -95,16 +95,28 @@ impl fmt::Display for DisplayNameError {
 impl std::error::Error for DisplayNameError {}
 
 /// The exact bidi set rejected: U+202A-U+202E and U+2066-U+2069.
-fn is_bidi_control(c: char) -> bool {
+pub(crate) fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Invisible breaks/joiners that carry no linguistic meaning: U+200B,
+/// U+2060-U+2064, U+FEFF.
+pub(crate) fn is_invisible_break(c: char) -> bool {
+    matches!(c, '\u{200B}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}')
+}
+
+/// C0/C1 controls (`char::is_control`) except '\n' and '\t'.
+pub(crate) fn is_disallowed_control(c: char) -> bool {
+    c.is_control() && c != '\n' && c != '\t'
 }
 
 /// Unicode category Cf plus U+180E, minus the bidi set (reported separately).
 fn is_invisible_format(c: char) -> bool {
-    matches!(c,
+    is_invisible_break(c)
+        || matches!(c,
         '\u{00AD}' | '\u{0600}'..='\u{0605}' | '\u{061C}' | '\u{06DD}' | '\u{070F}'
-        | '\u{0890}'..='\u{0891}' | '\u{08E2}' | '\u{180E}' | '\u{200B}'..='\u{200F}'
-        | '\u{2060}'..='\u{2064}' | '\u{206A}'..='\u{206F}' | '\u{FEFF}'
+        | '\u{0890}'..='\u{0891}' | '\u{08E2}' | '\u{180E}' | '\u{200C}'..='\u{200F}'
+        | '\u{206A}'..='\u{206F}'
         | '\u{FFF9}'..='\u{FFFB}' | '\u{110BD}' | '\u{110CD}' | '\u{13430}'..='\u{1343F}'
         | '\u{1BCA0}'..='\u{1BCA3}' | '\u{1D173}'..='\u{1D17A}' | '\u{E0001}'
         | '\u{E0020}'..='\u{E007F}')
@@ -352,5 +364,26 @@ mod tests {
                 "input: {input:?}"
             );
         }
+    }
+
+    #[test]
+    fn display_name_policy_unchanged() {
+        for c in [
+            '\u{200C}', '\u{200E}', '\u{200F}', '\u{061C}', '\u{00AD}', '\u{0600}', '\u{200B}',
+            '\u{2060}', '\u{FEFF}',
+        ] {
+            let name = format!("a{c}b");
+            assert_eq!(
+                validate_display_name(&name),
+                Err(DisplayNameError::InvisibleCharacter),
+                "{:04X}",
+                c as u32
+            );
+        }
+        assert_eq!(
+            validate_display_name("a\u{202E}b"),
+            Err(DisplayNameError::BidiOverride)
+        );
+        assert!(validate_display_name("👨\u{200D}👩\u{200D}👧").is_ok());
     }
 }
