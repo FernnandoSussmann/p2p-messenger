@@ -16,7 +16,7 @@ only once they carry real code — no empty stubs or placeholder modules.
 | Crate      | Status  | Responsibility                                               |
 | ---------- | ------- | ------------------------------------------------------------ |
 | `protocol` | present | Shared serde wire types (`Envelope`, `Payload`, …) + version |
-| `core`     | present | UI-agnostic logic by slices: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence) and `contacts` (contact book, trust, interim store; more to come) |
+| `core`     | present | UI-agnostic logic by slices: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence) and `contacts` (contact book, trust, interim store) and `messaging` (encrypted message store; more to come) |
 | `app`      | present | Thin Tauri v2 + Svelte shell over `core`                     |
 | `headless` | present | Test-only headless node + file keyring for Level-3 simulation; never shipped, never used by `app` |
 
@@ -24,6 +24,9 @@ only once they carry real code — no empty stubs or placeholder modules.
 
 Requires Rust 1.95 or newer (the workspace MSRV), Node.js 20+, and the [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/)
 (on Debian/Ubuntu: `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev`).
+A C compiler, `perl` and `make` are also required: SQLCipher and a vendored
+OpenSSL are compiled from source (on Windows, install Strawberry Perl). The
+first build takes a few minutes.
 
 ```sh
 npm start
@@ -90,11 +93,17 @@ in the Accept, naming and rename prompts, never in the list.
   zero-width characters.
 - **Remove…** always removes trust and closes any open connection, so their
   next connect prompts again. Your message history is deleted only if you tick
-  "Also delete our message history" (off by default). No message store exists
-  yet, so there is nothing to delete until DD-04/DD-05.
+  "Also delete our message history" (off by default). Ticking it deletes the
+  stored messages with that contact from the encrypted message database.
 - Copying a NodeId: choose **Show full NodeId**, select it and use your
   system's copy shortcut.
 - Contacts are stored in plaintext until DD-05.
+
+### Message storage
+
+Messages live in `messenger.db` in the (profile) data directory, encrypted with
+SQLCipher under the database key held in your OS keychain. A wrong key or a
+corrupt file is reported, and the file is never reset or recreated.
 
 ### On this network, presence and relay
 

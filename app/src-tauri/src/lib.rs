@@ -1,6 +1,7 @@
 //! Tauri shell: builds the identity service on the OS boundaries, runs the
 //! network node and exposes the identity and network commands to the webview.
 
+mod chat_cmd;
 mod contacts_cmd;
 mod identity_cmd;
 mod net_cmd;
@@ -11,13 +12,14 @@ mod test_util;
 use std::sync::Arc;
 use std::time::Duration;
 
-use messenger_core::contacts::{migrate_legacy_known_peers, FileContactStore, NoMessageStore};
+use messenger_core::contacts::{migrate_legacy_known_peers, FileContactStore};
 use messenger_core::discovery::LiveTicketProvider;
 use messenger_core::identity::{FileSettingsStore, IdentityService, IdentityStatus, OsKeychain};
 use tauri::{Manager, RunEvent};
 
 const APP_TITLE: &str = "p2p-messenger";
 
+use chat_cmd::ChatState;
 use contacts_cmd::{
     contacts_add, contacts_is_known, contacts_list, contacts_remove, contacts_rename,
     contacts_set_verified, ContactsState,
@@ -63,10 +65,9 @@ pub fn run() {
                     eprintln!("legacy known peers not migrated; those peers will be prompted again")
                 }
             }
-            app.manage(Arc::new(ContactsState::new(
-                contacts_store,
-                Arc::new(NoMessageStore),
-            )));
+            let chat = Arc::new(ChatState::new());
+            app.manage(Arc::new(ContactsState::new(contacts_store, chat.clone())));
+            app.manage(chat);
             let settings = Arc::new(FileSettingsStore::new(data_dir.clone()));
             let tickets = LiveTicketProvider::new();
             let service: AppIdentity = IdentityService::new(

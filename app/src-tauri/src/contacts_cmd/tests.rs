@@ -8,6 +8,7 @@ use messenger_core::discovery::{ConnectionState, Direction};
 use messenger_core::identity::KeychainStore;
 
 use super::*;
+use crate::chat_cmd::ChatState;
 use crate::net_cmd::{connect_ticket, lan_peers, pending_incoming};
 use crate::test_util::{
     assert_forms_absent, events, expect, is_incoming, is_state, started, started_with, ticket_of,
@@ -321,6 +322,47 @@ async fn contacts_remove_with_clear_history_erases_then_removes() {
     assert_eq!(history.calls().len(), 1);
     assert_eq!(history.calls()[0].1, node(2));
     assert!(list(&c).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn remove_with_erase_deletes_stored_messages() {
+    use messenger_core::identity::testing::FakeKeychain;
+    use messenger_core::identity::{IdentityService, MemorySettingsStore, NodeIdTicketProvider};
+    use messenger_core::messaging::{MessageStatus, MessageStore};
+
+    for (flag, kept) in [(Some(true), 0), (Some(false), 2)] {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = IdentityService::new(
+            FakeKeychain::new(),
+            MemorySettingsStore::new(),
+            NodeIdTicketProvider,
+            dir.path(),
+        );
+        identity.provision().unwrap();
+        let chat = Arc::new(ChatState::new());
+        chat.open_store(&identity).unwrap();
+        let (account, store) = chat.store().unwrap();
+        let c = ContactsState::new(Arc::new(MemoryContactStore::new()), chat.clone());
+        c.bind(account, node(1));
+        let net = NetState::default();
+        add(&c, &net, &id(2), "Bobby").await.unwrap();
+
+        let msg = |body: &str| protocol::ChatMessage {
+            id: protocol::new_message_id(),
+            sent_at_ms: 1,
+            body: body.to_owned(),
+        };
+        store
+            .insert_outgoing(&account, &node(2), &msg("out"), MessageStatus::Sending)
+            .unwrap();
+        store
+            .insert_incoming(&account, &node(2), &msg("in"), 2)
+            .unwrap();
+
+        remove(&c, &net, &id(2), flag).await.unwrap();
+        let rows = store.page(&account, &node(2), None, 10).unwrap();
+        assert_eq!(rows.len(), kept, "{flag:?}");
+    }
 }
 
 #[tokio::test]

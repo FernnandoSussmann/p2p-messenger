@@ -26,6 +26,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::chat_cmd::ChatState;
 use crate::contacts_cmd::ContactsState;
 use crate::identity_cmd::{AppIdentity, DisplayNameKind};
 
@@ -338,6 +339,7 @@ pub async fn start_if_present<K: KeychainStore, S: SettingsStore, T: TicketProvi
     settings: Arc<dyn SettingsStore + Send + Sync>,
     tickets: LiveTicketProvider,
     contacts: &ContactsState,
+    chat: &ChatState,
     mut config: NodeConfig,
 ) -> bool {
     let (account, known) = match identity.status() {
@@ -350,6 +352,10 @@ pub async fn start_if_present<K: KeychainStore, S: SettingsStore, T: TicketProvi
         ),
         _ => return false,
     };
+    // A failed open leaves contacts and networking usable; erase fails closed.
+    if let Err(e) = chat.open_store(identity) {
+        eprintln!("message store unavailable: {e}");
+    }
     let start = async {
         let relay_err = |what: &str| StartError::Bind(format!("relay setting {what}"));
         apply_relay_override(&*settings, &account, &state.relay_override)
@@ -380,12 +386,14 @@ pub fn ensure_started(app: &AppHandle) {
         let boot = app.state::<NetBoot>();
         let identity = app.state::<AppIdentity>();
         let contacts = app.state::<Arc<ContactsState>>();
+        let chat = app.state::<Arc<ChatState>>();
         let started = start_if_present(
             &state,
             &*identity,
             boot.settings.clone(),
             boot.tickets.clone(),
             &contacts,
+            &chat,
             NodeConfig::desktop(),
         )
         .await;
@@ -474,6 +482,7 @@ mod tests {
     use messenger_core::identity::{
         DisplayName, IdentityService, KeychainStore, MemorySettingsStore, Ticket,
     };
+    use messenger_core::messaging::MessageStore;
 
     use super::*;
     use crate::identity_cmd::{my_info, provision};
@@ -866,12 +875,50 @@ mod tests {
             broken,
             tickets,
             &contacts,
+            &ChatState::new(),
             NodeConfig::loopback(),
         )
         .await;
         assert!(!started);
         assert!(state.node().is_err());
         assert!(contacts.book().is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn start_opens_message_store_when_identity_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let (identity, settings, tickets) = provisioned_identity(&dir);
+        let chat = ChatState::new();
+        let state = NetState::default();
+        let contacts = test_contacts();
+        macro_rules! start {
+            () => {
+                start_if_present(
+                    &state,
+                    &identity,
+                    settings.clone(),
+                    tickets.clone(),
+                    &contacts,
+                    &chat,
+                    NodeConfig::loopback(),
+                )
+                .await
+            };
+        }
+
+        assert!(!start!());
+        assert!(chat.store().is_none(), "no store without an identity");
+
+        identity.provision().unwrap();
+        assert!(start!());
+        let (account, store) = chat.store().expect("store opened");
+        assert_eq!(account, account_of(&identity));
+        assert!(dir.path().join(messenger_core::messaging::DB_FILE).exists());
+        assert!(store
+            .page(&account, &state.node().unwrap().node_id(), None, 1)
+            .unwrap()
+            .is_empty());
+        state.shutdown_with_timeout(Duration::from_secs(2)).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -996,6 +1043,7 @@ mod tests {
             settings.clone(),
             tickets.clone(),
             &test_contacts(),
+            &ChatState::new(),
             NodeConfig::loopback(),
         )
         .await
@@ -1109,6 +1157,7 @@ mod tests {
             settings.clone(),
             tickets.clone(),
             &contacts,
+            &ChatState::new(),
             NodeConfig::loopback(),
         )
         .await;
