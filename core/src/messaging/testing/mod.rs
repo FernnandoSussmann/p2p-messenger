@@ -1,5 +1,6 @@
 //! Test doubles for the messaging slice (behind `test-support`).
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use protocol::{ChatMessage, MessageId};
@@ -11,6 +12,57 @@ use super::model::{
 use super::store::{clean_query, MessageStore, MAX_PAGE, MAX_SEARCH_RESULTS};
 use crate::contacts::{HistoryEraseError, HistoryEraser};
 use crate::identity::{AccountId, NodeId};
+
+mod peer;
+
+pub use peer::{
+    chat_peer, connect_and_accept, restart_chat_peer, send_on_stream, send_raw_frame, ChatPeer,
+    RawReply, StoreKind,
+};
+
+/// Fault injection and instrumentation shared by an engine's tasks.
+#[derive(Default)]
+pub struct Faults {
+    /// Acks still to be dropped (the stream is reset instead).
+    pub drop_acks: AtomicUsize,
+    /// Acks actually written.
+    pub acks_sent: AtomicUsize,
+    /// Peak number of outstanding inbound reader tasks.
+    pub inbound_in_flight_max: AtomicUsize,
+    /// Peak number of concurrently in-flight outbound attempts.
+    pub outbound_in_flight_max: AtomicUsize,
+}
+
+impl Faults {
+    pub(super) fn record_outbound(&self, in_flight: usize) {
+        self.outbound_in_flight_max
+            .fetch_max(in_flight, Ordering::SeqCst);
+    }
+
+    pub(super) fn record_inbound(&self, live: usize) {
+        self.inbound_in_flight_max.fetch_max(live, Ordering::SeqCst);
+    }
+
+    pub(super) fn take_ack_drop(&self) -> bool {
+        let mut current = self.drop_acks.load(Ordering::SeqCst);
+        while current > 0 {
+            match self.drop_acks.compare_exchange(
+                current,
+                current - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+        false
+    }
+
+    pub(super) fn count_ack(&self) {
+        self.acks_sent.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 #[derive(Default)]
 struct Inner {
