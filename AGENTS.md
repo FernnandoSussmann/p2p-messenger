@@ -68,6 +68,7 @@ fix the failure instead.
 - Clipboard access (`writeText` / `clipboard`) is permitted **only** in `app/src/views/MyInfo.svelte` (and tests).
 - Logs must never contain message plaintext, private keys, or secrets. NodeIds and addresses are fine.
 - Everything on the wire is encrypted; relays only ever see ciphertext.
+- Logging goes through `core::logging` helpers. The redaction guard (`core/tests/log_redaction_guard.rs`) is enforced; extend its allowlist only with reviewed, non-sensitive field names.
 
 ## Testing
 

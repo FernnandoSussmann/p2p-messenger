@@ -358,7 +358,8 @@ pub async fn start_if_present<K: KeychainStore, S: SettingsStore, T: TicketProvi
     };
     // A storage failure is a blocking, user-visible state (DD-05: corruption is
     // never a silent reset); the node starts after `storage_retry` succeeds.
-    if chat.open_store(storage, &account).is_err() {
+    if let Err(e) = chat.open_store(storage, &account) {
+        tracing::warn!(error = %e, "message store unavailable");
         return false;
     }
     let start = async {
@@ -416,7 +417,7 @@ pub fn ensure_started(app: &AppHandle) {
             {
                 Ok(messaging) => Some(messaging.subscribe()),
                 Err(_) => {
-                    eprintln!("messaging unavailable; chat sending is disabled");
+                    tracing::warn!("messaging unavailable; chat sending is disabled");
                     None
                 }
             },
