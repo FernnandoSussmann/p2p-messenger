@@ -532,6 +532,10 @@ async fn remove_with_erase_clears_chat_history_end_to_end() {
             .await
             .unwrap();
         assert_eq!(page.messages.len(), kept, "{flag:?}");
+        if flag == Some(true) {
+            let (_, store) = a.chat.store_ref().unwrap();
+            assert_eq!(store.freelist_count().unwrap(), 0);
+        }
     }
 }
 

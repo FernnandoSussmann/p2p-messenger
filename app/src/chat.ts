@@ -40,6 +40,8 @@ export type ChatCmdError =
   | { type: "NotResendable" }
   | { type: "InvalidQuery" }
   | { type: "ContactsUnavailable" }
+  | { type: "NotConfirmed" }
+  | { type: "HistoryClearFailed" }
   | { type: "Internal" };
 
 export const MAX_BODY_BYTES = 16384;
@@ -58,6 +60,8 @@ export const chatHistory = (nodeId: string, before: string | null, limit: number
 export const historySearch = (query: string, nodeId: string | null, limit: number | null = null) =>
   invoke<MessageDto[]>("history_search", { query, nodeId, limit });
 
+export const historyClear = (nodeId: string) => invoke<void>("history_clear", { nodeId, confirm: true });
+
 const messages: Record<ChatCmdError["type"], string> = {
   NotReady: "Messaging is not ready yet. Try again in a moment.",
   StoreUnavailable: "Message history is unavailable right now.",
@@ -73,6 +77,8 @@ const messages: Record<ChatCmdError["type"], string> = {
   NotResendable: "That message can't be resent.",
   InvalidQuery: "That search is not valid.",
   ContactsUnavailable: "Contacts are unavailable right now.",
+  NotConfirmed: "Clearing history needs your confirmation.",
+  HistoryClearFailed: "History could not be cleared. Nothing was sent. Try again.",
   Internal: "Something went wrong. Try again.",
 };
 

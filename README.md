@@ -161,7 +161,7 @@ Deleting the log folder is a privacy action and is safe at any time.
 
 Open **Contacts**, then a contact row's **Message** button. **Back** (or any tab)
 returns to the tabs; an unread count shows on the button while the chat is closed.
-Commands: `chat_send`, `chat_resend`, `chat_history` and `history_search`; events:
+Commands: `chat_send`, `chat_resend`, `chat_history`, `history_search` and `history_clear`; events:
 `message_received`, `message_status` and `chat_resync`.
 
 - Status: **Sending**, **Delivered**, **Pending** (waits for a connection and is
@@ -180,6 +180,13 @@ Commands: `chat_send`, `chat_resend`, `chat_history` and `history_search`; event
 - Search within a conversation finds words in its history. History and search
   read the encrypted store, so they work even if the node failed to start.
   Storage is `messenger.db` (see Encrypted storage).
+- **Clear history…** (in the chat header, also for removed contacts) deletes the
+  whole conversation after a confirmation. The messages are removed from this
+  device's encrypted database and the space they used is overwritten. This cannot
+  remove the other person's copy, backups or snapshots of this computer, or
+  traces some storage hardware (such as SSDs) may keep. Messages still waiting to
+  be sent are marked Not delivered. Remove contact with "Also delete our message
+  history" uses the same path.
 
 ### On this network, presence and relay
 
@@ -298,6 +305,10 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 27. Remove the contact with "Also delete our message history", then re-add it:
     the chat is empty. Without the option, the history remains. Queued Pending
     messages for a removed contact show Not delivered.
+    Clear history… while connected empties your chat and search, and the peer's
+    history is unchanged. Clear history… of a removed contact works too, and
+    search then finds nothing. `grep -c <cleared word> <profile data dir>/messenger.db`
+    returns 0.
 28. Empty or whitespace input keeps Send disabled. A paste over 16 KiB disables
     Send and shows the counter.
 29. `grep -c "<a word you sent>" <profile data dir>/messenger.db` returns 0 (the

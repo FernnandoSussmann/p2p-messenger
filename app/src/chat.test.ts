@@ -1,10 +1,14 @@
-import { describe, it, expect } from "vitest";
-import { describeChatError, utf8Length, type ChatCmdError } from "./chat";
+import { describe, it, expect, vi } from "vitest";
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+
+import { describeChatError, historyClear, utf8Length, type ChatCmdError } from "./chat";
 
 const ALL: ChatCmdError["type"][] = [
   "NotReady", "StoreUnavailable", "InvalidNodeId", "InvalidMessageId", "InvalidCursor", "SelfMessage",
   "NotAContact", "EmptyBody", "BodyTooLarge", "OutboxFull", "NotFound", "NotResendable", "InvalidQuery",
-  "ContactsUnavailable", "Internal",
+  "ContactsUnavailable", "NotConfirmed", "HistoryClearFailed", "Internal",
 ];
 
 describe("chat", () => {
@@ -14,6 +18,12 @@ describe("chat", () => {
     expect(new Set(texts).size).toBe(ALL.length);
     expect(describeChatError({ type: "SelfMessage" })).toBe("You can't message yourself.");
     expect(describeChatError(undefined)).toBe(describeChatError({ type: "Internal" }));
+  });
+
+  it("historyClear sends confirm true", async () => {
+    invoke.mockResolvedValue(undefined);
+    await historyClear("abc");
+    expect(invoke).toHaveBeenCalledWith("history_clear", { nodeId: "abc", confirm: true });
   });
 
   it("utf8Length counts an emoji as 4 bytes", () => {

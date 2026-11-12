@@ -24,7 +24,7 @@ use tauri::{Manager, RunEvent};
 
 const APP_TITLE: &str = "p2p-messenger";
 
-use chat_cmd::{chat_history, chat_resend, chat_send, history_search, ChatState};
+use chat_cmd::{chat_history, chat_resend, chat_send, history_clear, history_search, ChatState};
 use contacts_cmd::{
     contacts_add, contacts_is_known, contacts_list, contacts_remove, contacts_rename,
     contacts_set_verified, ContactsState,
@@ -129,6 +129,7 @@ pub fn run() {
             chat_resend,
             chat_history,
             history_search,
+            history_clear,
             storage_status,
             storage_retry
         ])

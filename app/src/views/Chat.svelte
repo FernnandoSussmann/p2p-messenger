@@ -3,11 +3,12 @@
   import { historySearch, describeChatError, type MessageDto } from "../chat";
   import { contacts } from "../lib/contactsStore";
   import { connections } from "../lib/netStore";
-  import { conversation, loadOlder, sendMessage } from "../lib/chatStore";
+  import { conversation, loadOlder, resetConversation, sendMessage } from "../lib/chatStore";
   import { formatLocalTime } from "../lib/time";
   import TrustBadge from "./TrustBadge.svelte";
   import MessageBubble from "./MessageBubble.svelte";
   import Composer from "./Composer.svelte";
+  import ClearHistoryDialog from "./ClearHistoryDialog.svelte";
 
   interface Props {
     nodeId: string;
@@ -28,6 +29,17 @@
   let searchError = $state<string | null>(null);
   let searchSeq = 0;
   let lastNewest: string | null = null;
+  let clearing = $state(false);
+  let cleared = $state(false);
+
+  function historyCleared() {
+    resetConversation(nodeId);
+    query = "";
+    results = null;
+    searchSeq++;
+    clearing = false;
+    cleared = true;
+  }
 
   function onScroll() {
     if (!log) return;
@@ -87,7 +99,19 @@
     <strong><bdi>{contact?.nickname ?? nodeId.slice(0, 8)}</bdi></strong>
     {#if contact}<TrustBadge verified={contact.verified} />{/if}
     <span data-testid="connection-text">{connected ? "Connected" : "Not connected"}</span>
+    <button type="button" disabled={clearing} onclick={() => ((clearing = true), (cleared = false))}>
+      Clear history…
+    </button>
   </header>
+  {#if clearing}
+    <ClearHistoryDialog
+      {nodeId}
+      nickname={contact?.nickname ?? nodeId.slice(0, 8)}
+      onDone={historyCleared}
+      onCancel={() => (clearing = false)}
+    />
+  {/if}
+  {#if cleared}<p role="status">History cleared.</p>{/if}
   {#if !contact}
     <p role="status">This contact was removed.</p>
   {:else if !connected}

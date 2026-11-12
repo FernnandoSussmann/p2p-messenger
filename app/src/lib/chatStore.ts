@@ -107,6 +107,11 @@ export function closeChat() {
   conversation.set(null);
 }
 
+export function resetConversation(nodeId: string) {
+  updateOpen(nodeId, (c) => ({ ...c, messages: [], nextBefore: null, error: null }));
+  unread.update((u) => ({ ...u, [nodeId]: 0 }));
+}
+
 export async function loadOlder(): Promise<void> {
   const cur = get(conversation);
   if (!cur || cur.loading || cur.nextBefore === null) return;
