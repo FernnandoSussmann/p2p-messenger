@@ -12,6 +12,7 @@ use messenger_core::identity::{AccountId, NodeId};
 use serde::Serialize;
 use tauri::State;
 
+use crate::chat_cmd::ChatState;
 use crate::identity_cmd::DisplayNameKind;
 use crate::net_cmd::NetState;
 
@@ -46,7 +47,7 @@ impl From<ContactError> for ContactsCmdError {
 
 const MAX_NODE_ID_INPUT_BYTES: usize = 128;
 
-fn parse_node_id(raw: &str) -> Result<NodeId, ContactsCmdError> {
+pub(crate) fn parse_node_id(raw: &str) -> Result<NodeId, ContactsCmdError> {
     if raw.len() > MAX_NODE_ID_INPUT_BYTES {
         return Err(ContactsCmdError::InvalidNodeId);
     }
@@ -147,10 +148,12 @@ pub async fn set_verified(
 }
 
 /// `clear_history: None` keeps history. After a successful removal the live
-/// connection is closed so the revocation takes effect immediately.
+/// connection is closed so the revocation takes effect immediately, and the
+/// peer's queued messages become Not delivered.
 pub async fn remove(
     c: &ContactsState,
     net: &NetState,
+    chat: &ChatState,
     node_id: &str,
     clear_history: Option<bool>,
 ) -> Result<RemoveContactDto, ContactsCmdError> {
@@ -164,6 +167,9 @@ pub async fn remove(
     let removal = blocking(book, move |b| b.remove(&peer, choice)).await?;
     if let Ok(node) = net.node() {
         node.disconnect(&peer);
+    }
+    if let Ok(messaging) = chat.messaging() {
+        messaging.forget_peer(peer).await;
     }
     Ok(RemoveContactDto::new(&peer, removal))
 }
@@ -214,10 +220,11 @@ pub async fn contacts_set_verified(
 pub async fn contacts_remove(
     contacts: State<'_, Arc<ContactsState>>,
     net: State<'_, NetState>,
+    chat: State<'_, Arc<ChatState>>,
     node_id: String,
     clear_history: Option<bool>,
 ) -> Result<RemoveContactDto, ContactsCmdError> {
-    remove(&contacts, &net, &node_id, clear_history).await
+    remove(&contacts, &net, &chat, &node_id, clear_history).await
 }
 
 #[tauri::command]
