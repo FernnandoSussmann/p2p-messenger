@@ -50,6 +50,7 @@ pub enum DisplayNameKind {
     TooLong,
     ControlCharacter,
     BidiOverride,
+    InvisibleCharacter,
 }
 
 impl From<DisplayNameError> for DisplayNameKind {
@@ -59,6 +60,7 @@ impl From<DisplayNameError> for DisplayNameKind {
             DisplayNameError::TooLong => Self::TooLong,
             DisplayNameError::ControlCharacter => Self::ControlCharacter,
             DisplayNameError::BidiOverride => Self::BidiOverride,
+            DisplayNameError::InvisibleCharacter => Self::InvisibleCharacter,
         }
     }
 }
@@ -346,6 +348,7 @@ mod tests {
             (&"a".repeat(129), DisplayNameKind::TooLong),
             ("bad\nname", DisplayNameKind::ControlCharacter),
             ("evil\u{202E}name", DisplayNameKind::BidiOverride),
+            ("zero\u{200B}width", DisplayNameKind::InvisibleCharacter),
         ];
         for (input, kind) in cases {
             assert_eq!(
@@ -411,6 +414,14 @@ mod tests {
         assert_eq!(
             value,
             serde_json::json!({"type": "InvalidDisplayName", "kind": "TooLong"})
+        );
+        let value = serde_json::to_value(IdentityCmdError::InvalidDisplayName {
+            kind: DisplayNameKind::InvisibleCharacter,
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"type": "InvalidDisplayName", "kind": "InvisibleCharacter"})
         );
         let value = serde_json::to_value(IdentityCmdError::AlreadyProvisioned).unwrap();
         assert_eq!(value, serde_json::json!({"type": "AlreadyProvisioned"}));

@@ -44,6 +44,7 @@ describe("FirstRunWizard", () => {
     ["TooLong", "too long"],
     ["ControlCharacter", "control characters"],
     ["BidiOverride", "direction"],
+    ["InvisibleCharacter", "invisible characters"],
     ["Empty", "empty"],
   ])("blocks on core rejection %s", async (kind, text) => {
     const onDone = await toNameStep();

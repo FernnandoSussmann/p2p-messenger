@@ -22,7 +22,7 @@ use tokio::time::{sleep, timeout};
 use super::events::{ConnectionState, Direction, FailureReason, IncomingRequest, NetEvent};
 use super::flood::{Admission, FloodGuard, GateLimits};
 use super::hello::{decode_hello, encode_hello};
-use super::known_peers::KnownPeers;
+use super::known_peers::{KnownPeers, KnownPeersError, NameSource};
 use super::lan::{LanDiscovery, LanError, LanEvent, LanMode, LanPeer, LanPeers, MdnsLan, NoLan};
 use super::ticket_provider::LiveTicketProvider;
 use crate::identity::{
@@ -252,6 +252,7 @@ struct Pending {
 struct Authorized {
     conn: Connection,
     stable_id: usize,
+    display_name: Option<DisplayName>,
 }
 
 struct State {
@@ -295,6 +296,16 @@ impl Inner {
             node_id,
             direction,
             state,
+            display_name: None,
+        });
+    }
+
+    fn emit_connected(&self, node_id: NodeId, direction: Direction, name: Option<DisplayName>) {
+        self.emit(NetEvent::ConnectionState {
+            node_id,
+            direction,
+            state: ConnectionState::Connected,
+            display_name: name,
         });
     }
 
@@ -314,6 +325,19 @@ impl Inner {
         }
         pending
     }
+}
+
+/// Runs a known-peers call on the blocking pool so file I/O never stalls the
+/// async runtime. A panicked or cancelled task is an `Err`, which callers treat
+/// as "unknown" (fail closed).
+async fn known_call<T: Send + 'static>(
+    inner: &Inner,
+    f: impl FnOnce(&dyn KnownPeers) -> Result<T, KnownPeersError> + Send + 'static,
+) -> Result<T, KnownPeersError> {
+    let known = inner.known.clone();
+    tokio::task::spawn_blocking(move || f(known.as_ref()))
+        .await
+        .unwrap_or(Err(KnownPeersError))
 }
 
 /// The running node. Dropping it closes the endpoint.
@@ -443,7 +467,8 @@ impl Node {
         Ok(peer)
     }
 
-    /// Answers the open prompt of `peer`.
+    /// Answers the prompt for this session only; `contacts::accept_incoming`
+    /// persists trust.
     pub fn respond_incoming(&self, peer: &NodeId, accept: bool) -> Result<(), RespondError> {
         let pending = self
             .inner
@@ -454,6 +479,62 @@ impl Node {
             .decision
             .send(accept)
             .map_err(|_| RespondError::NoSuchRequest)
+    }
+
+    /// The open prompt of `peer`, if any.
+    pub fn pending_request(&self, peer: &NodeId) -> Option<IncomingRequest> {
+        self.inner
+            .state()
+            .pending
+            .get(peer)
+            .map(|p| p.request.clone())
+    }
+
+    /// The most recent self-asserted name seen for `peer`: the authorized
+    /// Hello name, else the pending prompt's name, else the LAN record's.
+    /// Memory only. Advisory: for display and `self_name` only, never trust.
+    pub fn last_seen_name(&self, peer: &NodeId) -> Option<DisplayName> {
+        {
+            let state = self.inner.state();
+            if let Some(name) = state
+                .authorized
+                .get(peer)
+                .and_then(|a| a.display_name.clone())
+            {
+                return Some(name);
+            }
+            if let Some(name) = state
+                .pending
+                .get(peer)
+                .and_then(|p| p.request.display_name.clone())
+            {
+                return Some(name);
+            }
+        }
+        self.inner
+            .lan_peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(peer)
+            .and_then(|p| p.display_name.clone())
+    }
+
+    /// Closes the authorized connection to `peer`; the close watcher removes
+    /// it and emits `Disconnected`. False if there is none.
+    pub fn disconnect(&self, peer: &NodeId) -> bool {
+        let conn = self
+            .inner
+            .state()
+            .authorized
+            .get(peer)
+            .map(|a| a.conn.clone());
+        match conn {
+            Some(conn) => {
+                close(&conn, CLOSE_NORMAL);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Snapshot of open prompts, for seeding the UI after mount or reload.
@@ -674,8 +755,9 @@ async fn handle_incoming(inner: Arc<Inner>, incoming: Incoming, slot: HandshakeS
     drop(slot);
 
     // A storage error is treated as "unknown": fail closed, prompt the user.
-    if matches!(inner.known.is_known(&peer), Ok(true)) {
-        reply_and_authorize(&inner, conn, send, peer).await;
+    let peer_known = known_call(&inner, move |k| k.is_known(&peer)).await;
+    if matches!(peer_known, Ok(true)) {
+        reply_and_authorize(&inner, conn, send, peer, name).await;
         return;
     }
 
@@ -709,10 +791,7 @@ async fn handle_incoming(inner: Arc<Inner>, incoming: Incoming, slot: HandshakeS
 
     match outcome {
         Outcome::Accepted => {
-            if let Err(e) = inner.known.add(peer, name) {
-                tracing::debug!(peer = %peer.fmt_short(), error = %e, "could not remember peer");
-            }
-            reply_and_authorize(&inner, conn, send, peer).await;
+            reply_and_authorize(&inner, conn, send, peer, name).await;
         }
         Outcome::Declined => {
             close(&conn, CLOSE_DECLINED);
@@ -778,6 +857,7 @@ async fn reply_and_authorize(
     conn: Connection,
     mut send: iroh::endpoint::SendStream,
     peer: NodeId,
+    name: Option<DisplayName>,
 ) {
     let sent = async {
         send.write_all(&inner.own_hello()).await.ok()?;
@@ -793,26 +873,43 @@ async fn reply_and_authorize(
         );
         return;
     }
-    authorize(inner, conn, peer, Direction::Inbound);
+    authorize(inner, conn, peer, Direction::Inbound, name);
 }
 
 /// Records an authorized channel, replacing any older one for the same peer,
 /// and reports its end as `Disconnected`.
-fn authorize(inner: &Arc<Inner>, conn: Connection, peer: NodeId, direction: Direction) {
+fn authorize(
+    inner: &Arc<Inner>,
+    conn: Connection,
+    peer: NodeId,
+    direction: Direction,
+    name: Option<DisplayName>,
+) {
     let stable_id = conn.stable_id();
     let replaced = inner.state().authorized.insert(
         peer,
         Authorized {
             conn: conn.clone(),
             stable_id,
+            display_name: name.clone(),
         },
     );
     if let Some(old) = replaced {
         close(&old.conn, CLOSE_REPLACED);
     }
-    inner.emit_state(peer, direction, ConnectionState::Connected);
+    inner.emit_connected(peer, direction, name.clone());
 
     let inner = inner.clone();
+    let observer = inner.clone();
+    inner.runtime.spawn(async move {
+        let recorded = known_call(&observer, move |k| {
+            k.observe(&peer, name.as_ref(), NameSource::Hello)
+        })
+        .await;
+        if recorded.is_err() {
+            tracing::debug!(peer = %peer.fmt_short(), "could not record peer name");
+        }
+    });
     inner.runtime.clone().spawn(async move {
         conn.closed().await;
         let removed = {
@@ -874,10 +971,14 @@ async fn run_dial(inner: &Arc<Inner>, addr: EndpointAddr) -> Result<(), FailureR
     };
     // The user deliberately dialed this NodeId: remember it, but only now
     // that it answered with a valid Hello.
-    if let Err(e) = inner.known.add(peer, name) {
-        tracing::debug!(peer = %peer.fmt_short(), error = %e, "could not remember peer");
+    let stored = name.clone();
+    if known_call(inner, move |k| k.remember_dialed(&peer, stored.as_ref()))
+        .await
+        .is_err()
+    {
+        tracing::debug!(peer = %peer.fmt_short(), "could not remember dialed peer");
     }
-    authorize(inner, conn, peer, Direction::Outbound);
+    authorize(inner, conn, peer, Direction::Outbound, name);
     Ok(())
 }
 
@@ -934,16 +1035,42 @@ async fn lan_loop(inner: Arc<Inner>, mut events: tokio::sync::mpsc::Receiver<Lan
     tokio::pin!(closed);
     let mut dirty = false;
     let mut next_emit = tokio::time::Instant::now();
+    let mut observed: HashMap<NodeId, DisplayName> = HashMap::new();
     loop {
         tokio::select! {
             ev = events.recv() => {
                 let Some(ev) = ev else { break };
-                let changed = inner
-                    .lan_peers
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .apply(ev);
+                let (id, expired) = match &ev {
+                    LanEvent::Discovered { addr, .. } => (addr.id, false),
+                    LanEvent::Expired(id) => (*id, true),
+                };
+                let (changed, name) = {
+                    let mut peers = inner
+                        .lan_peers
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    let changed = peers.apply(ev);
+                    let name = peers.get(&id).and_then(|p| p.display_name.clone());
+                    (changed, name)
+                };
                 dirty |= changed;
+                if expired {
+                    observed.remove(&id);
+                } else if let Some(name) = name {
+                    if observed.get(&id) != Some(&name) {
+                        observed.insert(id, name.clone());
+                        let inner = inner.clone();
+                        inner.runtime.clone().spawn(async move {
+                            let recorded = known_call(&inner, move |k| {
+                                k.observe(&id, Some(&name), NameSource::Lan)
+                            })
+                            .await;
+                            if recorded.is_err() {
+                                tracing::debug!(peer = %id.fmt_short(), "could not record peer name");
+                            }
+                        });
+                    }
+                }
             }
             _ = tokio::time::sleep_until(next_emit), if dirty => {
                 let snapshot = inner

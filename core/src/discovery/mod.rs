@@ -22,7 +22,7 @@ pub use dto::{
 };
 pub use events::{ConnectionState, Direction, FailureReason, IncomingRequest, NetEvent};
 pub use flood::{Admission, FloodGuard, GateLimits};
-pub use known_peers::{FileKnownPeers, KnownPeers, KnownPeersError};
+pub use known_peers::{KnownPeers, KnownPeersError, NameSource};
 pub use lan::{
     decode_lan_name, encode_lan_name, LanDiscovery, LanError, LanEvent, LanMode, LanPeer, LanPeers,
     MdnsLan, LAN_NAME_MAX_BYTES, MAX_LAN_PEERS,

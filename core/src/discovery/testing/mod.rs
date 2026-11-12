@@ -1,7 +1,7 @@
 //! Test doubles for the discovery slice. Everything here drives the same
 //! [`Node`] code paths as production; there is no alternate gate.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -19,23 +19,31 @@ use tokio::sync::{broadcast, mpsc};
 use crate::discovery::events::NetEvent;
 use crate::discovery::flood::GateLimits;
 use crate::discovery::hello::encode_hello;
-use crate::discovery::known_peers::{KnownPeers, KnownPeersError};
+use crate::discovery::known_peers::{KnownPeers, KnownPeersError, NameSource};
 use crate::discovery::lan::{
     encode_lan_name, LanDiscovery, LanError, LanEvent, LanMode, LAN_NAME_MAX_BYTES,
 };
 use crate::discovery::node::{Node, NodeConfig, NodeDeps};
 use crate::discovery::ticket_provider::LiveTicketProvider;
 use crate::identity::testing::FakeKeychain;
-use crate::identity::{DisplayName, IdentityService, MemorySettingsStore, NodeId, SettingsStore};
+use crate::identity::{
+    AccountId, DisplayName, IdentityService, IdentityStatus, MemorySettingsStore, NodeId,
+    SettingsStore,
+};
 
 pub mod scenarios;
 
 const LAN_BUS_BUFFER: usize = 2048;
 
-/// In-memory [`KnownPeers`]. Names are stored as advisory values only.
+/// One recorded observation: the name (None = cleared) and where it was seen.
+pub type ObservedName = (Option<String>, NameSource);
+
+/// In-memory [`KnownPeers`]. Names are advisory observations only.
 #[derive(Default)]
 pub struct MemoryKnownPeers {
-    peers: Mutex<HashMap<NodeId, Option<DisplayName>>>,
+    peers: Mutex<HashSet<NodeId>>,
+    observed: Mutex<HashMap<NodeId, Vec<ObservedName>>>,
+    dialed: Mutex<Vec<NodeId>>,
 }
 
 impl MemoryKnownPeers {
@@ -51,25 +59,67 @@ impl MemoryKnownPeers {
         self.lock().is_empty()
     }
 
-    /// The last-seen name stored for `id`, if the peer is known and named.
-    pub fn name_of(&self, id: &NodeId) -> Option<String> {
-        self.lock()
-            .get(id)
-            .and_then(|n| n.as_ref().map(|n| n.as_str().to_owned()))
+    /// Pre-seeds `id` as a trusted peer.
+    pub fn trust(&self, id: NodeId) {
+        self.lock().insert(id);
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<NodeId, Option<DisplayName>>> {
+    /// Every advisory name observed for the known peer `id`, in order.
+    pub fn observed(&self, id: &NodeId) -> Vec<ObservedName> {
+        self.observed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Peers passed to `remember_dialed`, in order.
+    pub fn dialed(&self) -> Vec<NodeId> {
+        self.dialed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashSet<NodeId>> {
         self.peers.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 impl KnownPeers for MemoryKnownPeers {
     fn is_known(&self, id: &NodeId) -> Result<bool, KnownPeersError> {
-        Ok(self.lock().contains_key(id))
+        Ok(self.lock().contains(id))
     }
 
-    fn add(&self, id: NodeId, display_name: Option<DisplayName>) -> Result<(), KnownPeersError> {
-        self.lock().insert(id, display_name);
+    fn observe(
+        &self,
+        id: &NodeId,
+        name: Option<&DisplayName>,
+        source: NameSource,
+    ) -> Result<(), KnownPeersError> {
+        if !self.lock().contains(id) {
+            return Ok(());
+        }
+        self.observed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(*id)
+            .or_default()
+            .push((name.map(|n| n.as_str().to_owned()), source));
+        Ok(())
+    }
+
+    fn remember_dialed(
+        &self,
+        id: &NodeId,
+        _name: Option<&DisplayName>,
+    ) -> Result<(), KnownPeersError> {
+        self.dialed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(*id);
+        self.lock().insert(*id);
         Ok(())
     }
 }
@@ -79,11 +129,24 @@ pub struct FailingKnownPeers;
 
 impl KnownPeers for FailingKnownPeers {
     fn is_known(&self, _id: &NodeId) -> Result<bool, KnownPeersError> {
-        Err(KnownPeersError::Corrupt)
+        Err(KnownPeersError)
     }
 
-    fn add(&self, _id: NodeId, _name: Option<DisplayName>) -> Result<(), KnownPeersError> {
-        Err(KnownPeersError::Corrupt)
+    fn observe(
+        &self,
+        _id: &NodeId,
+        _name: Option<&DisplayName>,
+        _source: NameSource,
+    ) -> Result<(), KnownPeersError> {
+        Err(KnownPeersError)
+    }
+
+    fn remember_dialed(
+        &self,
+        _id: &NodeId,
+        _name: Option<&DisplayName>,
+    ) -> Result<(), KnownPeersError> {
+        Err(KnownPeersError)
     }
 }
 
@@ -278,11 +341,15 @@ impl LanDiscovery for MemoryLan {
 pub type SettingsWrapper =
     Arc<dyn Fn(Arc<MemorySettingsStore>) -> Arc<dyn SettingsStore + Send + Sync> + Send + Sync>;
 
+/// Builds the known-peers store once the account and NodeId are provisioned.
+pub type KnownFactory = Arc<dyn Fn(AccountId, NodeId) -> Arc<dyn KnownPeers> + Send + Sync>;
+
 /// How a test node is configured beyond the defaults.
 #[derive(Clone)]
 pub struct TestOptions {
     pub config: NodeConfig,
     pub known: Arc<dyn KnownPeers>,
+    known_factory: Option<KnownFactory>,
 }
 
 impl Default for TestOptions {
@@ -290,6 +357,7 @@ impl Default for TestOptions {
         Self {
             config: NodeConfig::loopback(),
             known: Arc::new(MemoryKnownPeers::new()),
+            known_factory: None,
         }
     }
 }
@@ -307,6 +375,13 @@ impl TestOptions {
 
     pub fn with_known(mut self, known: Arc<dyn KnownPeers>) -> Self {
         self.known = known;
+        self
+    }
+
+    /// Builds the store after provisioning, from the account and NodeId; runs
+    /// again on `restart`, so it must capture a shared store to keep data.
+    pub fn with_known_factory(mut self, f: KnownFactory) -> Self {
+        self.known_factory = Some(f);
         self
     }
 
@@ -400,6 +475,19 @@ async fn start(
     options: TestOptions,
     wrapper: Option<SettingsWrapper>,
 ) -> TestNode {
+    let known = match &options.known_factory {
+        Some(factory) => {
+            let IdentityStatus::Present {
+                account_id,
+                node_id,
+            } = identity.status()
+            else {
+                panic!("identity must be provisioned before the known factory runs");
+            };
+            factory(account_id, node_id)
+        }
+        None => options.known.clone(),
+    };
     let settings_dyn: Arc<dyn SettingsStore + Send + Sync> = match &wrapper {
         Some(wrap) => wrap(settings.clone()),
         None => settings.clone(),
@@ -408,7 +496,7 @@ async fn start(
         &identity,
         NodeDeps {
             settings: settings_dyn,
-            known: options.known.clone(),
+            known: known.clone(),
             tickets: tickets.clone(),
         },
         options.config.clone(),
@@ -418,7 +506,7 @@ async fn start(
     TestNode {
         node,
         identity,
-        known: options.known.clone(),
+        known,
         dir,
         keychain,
         settings,
@@ -452,6 +540,8 @@ pub fn hello_frame(name: &str) -> Vec<u8> {
 /// arbitrary bytes. Dropping it ends the connection.
 pub struct RawDial {
     pub conn: Connection,
+    // Kept open so the acceptor's Hello reply is not refused mid-write.
+    _recv: iroh::endpoint::RecvStream,
     _endpoint: Endpoint,
 }
 
@@ -468,12 +558,13 @@ pub async fn raw_dial(addr: EndpointAddr, first_frame: &[u8]) -> Result<RawDial,
         .connect(addr, ALPN)
         .await
         .map_err(|e| e.to_string())?;
-    let (mut send, _recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
+    let (mut send, recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
     // The acceptor may close mid-write on oversized input; that is the test.
     let _ = send.write_all(first_frame).await;
     let _ = send.finish();
     Ok(RawDial {
         conn,
+        _recv: recv,
         _endpoint: endpoint,
     })
 }

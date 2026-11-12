@@ -77,7 +77,11 @@ pub enum CtlCommand {
     Presence(Option<bool>),
     Peers,
     Connect(String),
-    Respond { node_id: String, accept: bool },
+    Respond {
+        node_id: String,
+        accept: bool,
+        nickname: Option<String>,
+    },
     Connected,
     Wait(WaitArgs),
     Shutdown,
@@ -198,12 +202,16 @@ fn parse_ctl(mut it: impl Iterator<Item = String>) -> Result<Command, CliError> 
         "connect" => CtlCommand::Connect(value(&mut it, "connect")?),
         "respond" => {
             let node_id = value(&mut it, "respond")?;
-            let accept = match it.next().as_deref() {
-                Some("accept") => true,
-                Some("decline") => false,
-                _ => return err("respond takes <NODE_ID> accept|decline"),
+            let (accept, nickname) = match it.next().as_deref() {
+                Some("accept") => (true, it.next()),
+                Some("decline") => (false, None),
+                _ => return err("respond takes <NODE_ID> accept [NICKNAME] | decline"),
             };
-            CtlCommand::Respond { node_id, accept }
+            CtlCommand::Respond {
+                node_id,
+                accept,
+                nickname,
+            }
         }
         "wait" => CtlCommand::Wait(parse_wait(&mut it)?),
         other => return err(format!("unknown command: {other}")),
@@ -384,16 +392,28 @@ mod tests {
             ctl("respond n1 accept"),
             CtlCommand::Respond {
                 node_id: "n1".into(),
-                accept: true
+                accept: true,
+                nickname: None
+            }
+        );
+        assert_eq!(
+            ctl("respond n1 accept Bobby"),
+            CtlCommand::Respond {
+                node_id: "n1".into(),
+                accept: true,
+                nickname: Some("Bobby".into())
             }
         );
         assert_eq!(
             ctl("respond n1 decline"),
             CtlCommand::Respond {
                 node_id: "n1".into(),
-                accept: false
+                accept: false,
+                nickname: None
             }
         );
+        assert!(p("ctl --data-dir /d respond n1 decline Bobby").is_err());
+        assert!(p("ctl --data-dir /d respond n1 accept Bobby extra").is_err());
         assert!(p("ctl --data-dir /d respond n1").is_err());
         assert!(p("ctl --data-dir /d respond n1 maybe").is_err());
         assert!(p("ctl --data-dir /d connect").is_err());

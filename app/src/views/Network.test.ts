@@ -58,7 +58,7 @@ describe("Network", () => {
     render(Network);
     expect(screen.queryAllByTestId("connection")).toHaveLength(0);
     connections.set({
-      abc: { node_id: "abc", direction: "outbound", state: "failed", reason: "declined" },
+      abc: { node_id: "abc", direction: "outbound", state: "failed", reason: "declined", display_name: null },
     });
     await waitFor(() => expect(screen.getAllByTestId("connection")).toHaveLength(1));
     expect(screen.getByText("abc")).toBeTruthy();
@@ -69,7 +69,7 @@ describe("Network", () => {
   it("renders a hostile peer id as inert text", async () => {
     const evil = "<b>x</b>‮";
     connections.set({
-      [evil]: { node_id: evil, direction: "inbound", state: "connected", reason: null },
+      [evil]: { node_id: evil, direction: "inbound", state: "connected", reason: null, display_name: null },
     });
     const { container } = render(Network);
     expect(await screen.findByTestId("connection")).toHaveTextContent(evil);
