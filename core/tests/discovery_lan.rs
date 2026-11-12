@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use core::contacts::testing::BookCell;
-use core::contacts::{accept_incoming, FileContactStore, NoMessageStore};
+use core::contacts::{accept_incoming, NoMessageStore, SqlCipherContactStore};
 use core::discovery::testing::{
     next_event, restart, spawn_test_node_with, spawn_test_node_wrapped, MemoryLanBus,
     RecordingAddressLookup, SettingsWrapper, TestNode, TestOptions,
@@ -19,9 +19,10 @@ use core::discovery::{
     NodeConfig, PresenceError, MAX_LAN_PEERS,
 };
 use core::identity::{
-    AccountId, DisplayName, FileSettingsStore, MemorySettingsStore, NodeId, SettingsError,
-    SettingsStore, Ticket,
+    AccountId, DbKey, DisplayName, KeychainError, MemorySettingsStore, NodeId, SettingsError,
+    SettingsStore, SqlCipherSettingsStore, Ticket,
 };
+use core::storage::{KeySource, Storage};
 use tokio::sync::broadcast::Receiver;
 
 fn run<F: std::future::Future>(fut: F) -> F::Output {
@@ -35,11 +36,25 @@ fn run<F: std::future::Future>(fut: F) -> F::Output {
 const WAIT: Duration = Duration::from_secs(10);
 const QUIET: Duration = Duration::from_millis(600);
 
-/// A LAN node whose trust store is a `ContactBook` over a file store in `dir`.
+/// One fixed DB key for every account of a test.
+struct FixedKey([u8; 32]);
+
+impl KeySource for FixedKey {
+    fn db_key(&self, _: &AccountId) -> Result<DbKey, KeychainError> {
+        Ok(DbKey::from_bytes(self.0))
+    }
+}
+
+fn storage(dir: &Path) -> Arc<Storage> {
+    Arc::new(Storage::new(dir, Arc::new(FixedKey(rand::random()))))
+}
+
+/// A LAN node whose trust store is a `ContactBook` over the encrypted contact
+/// store in `dir`.
 async fn contacts_lan_node(bus: &MemoryLanBus, name: &str, dir: &Path) -> (TestNode, BookCell) {
     let cell = BookCell::new();
     let factory = cell.known_factory(
-        Arc::new(FileContactStore::new(dir)),
+        Arc::new(SqlCipherContactStore::new(storage(dir))),
         Arc::new(NoMessageStore),
     );
     let options = TestOptions::default()
@@ -137,13 +152,14 @@ fn lan_ticket(node: &TestNode, of: &NodeId) -> String {
     LanPeerDto::from(&peer).ticket
 }
 
-/// Names and connections live in memory; presence and relay go to `dir`.
-struct FilePresence {
+/// Names and connections live in memory; presence and relay go to the
+/// encrypted database in `dir`.
+struct SqlPresence {
     inner: Arc<MemorySettingsStore>,
-    file: FileSettingsStore,
+    file: SqlCipherSettingsStore,
 }
 
-impl SettingsStore for FilePresence {
+impl SettingsStore for SqlPresence {
     fn set_display_name(&self, id: &AccountId, name: &DisplayName) -> Result<(), SettingsError> {
         self.inner.set_display_name(id, name)
     }
@@ -171,11 +187,11 @@ impl SettingsStore for FilePresence {
 }
 
 fn file_presence(dir: &Path) -> SettingsWrapper {
-    let dir = dir.to_path_buf();
+    let storage = storage(dir);
     Arc::new(move |inner| {
-        Arc::new(FilePresence {
+        Arc::new(SqlPresence {
             inner,
-            file: FileSettingsStore::new(&dir),
+            file: SqlCipherSettingsStore::new(storage.clone()),
         })
     })
 }
@@ -500,7 +516,7 @@ fn lan_peers_are_never_persisted() {
         let bus = MemoryLanBus::new();
         let cell = BookCell::new();
         let factory = cell.known_factory(
-            Arc::new(FileContactStore::new(known_dir.path())),
+            Arc::new(SqlCipherContactStore::new(storage(known_dir.path()))),
             Arc::new(NoMessageStore),
         );
         let a = spawn_test_node_wrapped(
@@ -526,7 +542,8 @@ fn lan_peers_are_never_persisted() {
                 assert!(!text.contains(&needle), "{path:?} holds a LAN peer");
             }
         }
-        assert!(settings_dir.path().join("settings.json").exists());
+        assert!(settings_dir.path().join("messenger.db").exists());
+        assert!(!settings_dir.path().join("settings.json").exists());
         assert!(cell.get().list().unwrap().is_empty());
     });
 }

@@ -13,7 +13,9 @@
 //!   `messages_fts`, an external-content table of `rowid` + `body` reached only
 //!   through a join on `messages.seq = messages_fts.rowid` filtered by
 //!   `messages.account_id` (`SQL_SEARCH_FTS`), whose maintenance statement
-//!   `SQL_FTS_OPTIMIZE` is allowlisted; and `legacy_imports`, which 05-02 adds.
+//!   `SQL_FTS_OPTIMIZE` is allowlisted; and `legacy_imports`, install-level
+//!   bookkeeping of the one-shot import of the old plaintext files (see
+//!   `legacy`).
 //!
 //! Feature slices own their table SQL as constant text; storage only orders
 //! it (see `schema`). Every value goes through a bound parameter.
@@ -25,8 +27,11 @@
 //! ~1 s criterion, so the full check stays at startup (and on `retry`).
 
 mod database;
+#[cfg(test)]
+mod discard_tests;
 mod error;
 mod handle;
+mod legacy;
 mod migrate;
 mod schema;
 #[cfg(test)]
@@ -35,6 +40,7 @@ mod tests;
 pub use database::Database;
 pub use error::StorageError;
 pub use handle::{KeySource, Storage, StorageStatus};
+pub(crate) use legacy::LegacyError;
 pub use schema::SCHEMA_VERSION;
 
 #[cfg(test)]

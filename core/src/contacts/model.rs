@@ -4,6 +4,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use super::store::LAST_SEEN_RESOLUTION_MS;
 use crate::identity::{validate_display_name, DisplayName, DisplayNameError, NodeId};
 
 /// What the user calls a contact. DD-01 rules ([`validate_display_name`]).
@@ -62,6 +63,33 @@ pub struct Contact {
 pub enum NameUpdate<'a> {
     Keep,
     Set(Option<&'a DisplayName>),
+}
+
+/// Applies an observation to `c` and returns whether anything material
+/// changed (so a store write is due). The only place the
+/// [`LAST_SEEN_RESOLUTION_MS`] throttle is implemented.
+pub(crate) fn apply_observation(
+    c: &mut Contact,
+    name: NameUpdate<'_>,
+    seen_at_ms: Option<i64>,
+) -> bool {
+    let mut changed = false;
+    if let NameUpdate::Set(new) = name {
+        if c.self_name.as_ref() != new {
+            c.self_name = new.cloned();
+            changed = true;
+        }
+    }
+    if let Some(seen) = seen_at_ms {
+        let stale = c
+            .last_seen_ms
+            .is_none_or(|prev| seen.saturating_sub(prev).abs() >= LAST_SEEN_RESOLUTION_MS);
+        if stale || changed {
+            c.last_seen_ms = Some(seen);
+        }
+        changed |= stale;
+    }
+    changed
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

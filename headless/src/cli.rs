@@ -83,6 +83,7 @@ pub enum CtlCommand {
         nickname: Option<String>,
     },
     Connected,
+    Contacts,
     Wait(WaitArgs),
     Shutdown,
 }
@@ -192,6 +193,7 @@ fn parse_ctl(mut it: impl Iterator<Item = String>) -> Result<Command, CliError> 
         "ticket" => CtlCommand::Ticket,
         "peers" => CtlCommand::Peers,
         "connected" => CtlCommand::Connected,
+        "contacts" => CtlCommand::Contacts,
         "shutdown" => CtlCommand::Shutdown,
         "presence" => CtlCommand::Presence(match it.next().as_deref() {
             None => None,
@@ -371,6 +373,7 @@ mod tests {
         assert_eq!(ctl("ticket"), CtlCommand::Ticket);
         assert_eq!(ctl("peers"), CtlCommand::Peers);
         assert_eq!(ctl("connected"), CtlCommand::Connected);
+        assert_eq!(ctl("contacts"), CtlCommand::Contacts);
         assert_eq!(ctl("shutdown"), CtlCommand::Shutdown);
     }
 

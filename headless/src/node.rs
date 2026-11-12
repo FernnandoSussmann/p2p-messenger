@@ -12,14 +12,15 @@ use std::time::Duration;
 
 use iroh::RelayUrl;
 use messenger_core::contacts::{
-    accept_incoming, migrate_legacy_known_peers, AcceptError, ContactBook, ContactError,
-    FileContactStore, Nickname, NoMessageStore,
+    accept_incoming, AcceptError, ContactBook, ContactError, Nickname, NoMessageStore,
+    SqlCipherContactStore,
 };
 use messenger_core::discovery::{
     event_json, ConnectError, LanMode, LanPeerDto, LiveTicketProvider, Node, NodeConfig, NodeDeps,
     RelayChoice,
 };
-use messenger_core::identity::{FileSettingsStore, IdentityService, IdentityStatus, NodeId};
+use messenger_core::identity::{IdentityService, IdentityStatus, NodeId, SqlCipherSettingsStore};
+use messenger_core::storage::Storage;
 use serde_json::{json, Value};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::Notify;
@@ -33,7 +34,8 @@ const TICKET_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 const WAIT_EVENTS: [&str; 3] = ["incoming_request", "connection_state", "lan_peers_changed"];
 
-type HeadlessIdentity = IdentityService<FileKeychain, Arc<FileSettingsStore>, LiveTicketProvider>;
+type HeadlessIdentity =
+    IdentityService<Arc<FileKeychain>, Arc<SqlCipherSettingsStore>, LiveTicketProvider>;
 
 struct Logged {
     name: &'static str,
@@ -166,15 +168,17 @@ pub async fn run(args: RunArgs) -> Result<(), RunError> {
     let listener = control::bind(&control::socket_path(&args.data_dir))
         .await
         .map_err(|e| RunError(e.to_string()))?;
-    let keychain =
-        FileKeychain::open(args.data_dir.join("keyring")).map_err(fail("cannot open keyring"))?;
+    let keychain = Arc::new(
+        FileKeychain::open(args.data_dir.join("keyring")).map_err(fail("cannot open keyring"))?,
+    );
     eprintln!(
         "TEST-ONLY headless node: throwaway identity, not for real use; \
          secrets stored unencrypted in {}",
         keychain.dir().display()
     );
 
-    let settings = Arc::new(FileSettingsStore::new(args.data_dir.clone()));
+    let storage = Arc::new(Storage::new(args.data_dir.clone(), keychain.clone()));
+    let settings = Arc::new(SqlCipherSettingsStore::new(storage.clone()));
     let tickets = LiveTicketProvider::new();
     let identity: HeadlessIdentity = IdentityService::new(
         keychain,
@@ -195,12 +199,7 @@ pub async fn run(args: RunArgs) -> Result<(), RunError> {
     else {
         return Err(RunError("identity is unavailable".into()));
     };
-    let contacts = Arc::new(FileContactStore::new(args.data_dir.clone()));
-    match migrate_legacy_known_peers(&args.data_dir, contacts.as_ref()) {
-        Ok(r) if r.migrated > 0 => eprintln!("migrated {} known peers to contacts", r.migrated),
-        Ok(_) => {}
-        Err(_) => eprintln!("legacy known peers not migrated; those peers will be prompted again"),
-    }
+    let contacts = Arc::new(SqlCipherContactStore::new(storage));
     let book = Arc::new(ContactBook::new(
         account_id,
         node_id,
@@ -355,6 +354,16 @@ async fn handle(
                 .collect();
             Reply::ok(json!({ "peers": peers }))
         }
+        Request::Contacts => match book.list() {
+            Ok(contacts) => {
+                let list: Vec<Value> = contacts
+                    .iter()
+                    .map(|c| json!({ "node_id": c.node_id.to_string(), "nickname": c.nickname.as_str() }))
+                    .collect();
+                Reply::ok(json!({ "contacts": list }))
+            }
+            Err(_) => Reply::err("ContactsUnavailable"),
+        },
         Request::Wait {
             event,
             node: want_node,

@@ -17,8 +17,8 @@ use messenger_core::discovery::{
     RespondError, StartError,
 };
 use messenger_core::identity::{
-    ticket_to_qr_svg, validate_relay_url, AccountId, FileSettingsStore, IdentityService,
-    IdentityStatus, KeychainStore, NodeId, SettingsError, SettingsStore, TicketError,
+    ticket_to_qr_svg, validate_relay_url, AccountId, IdentityService, IdentityStatus,
+    KeychainStore, NodeId, SettingsError, SettingsStore, SqlCipherSettingsStore, TicketError,
     TicketProvider,
 };
 use messenger_core::messaging::MessagingConfig;
@@ -324,7 +324,7 @@ pub fn forward(ev: &NetEvent, emit: impl Fn(&str, Value)) {
 
 /// Everything `ensure_started` needs besides the identity service.
 pub struct NetBoot {
-    pub settings: Arc<FileSettingsStore>,
+    pub settings: Arc<SqlCipherSettingsStore>,
     pub tickets: LiveTicketProvider,
 }
 

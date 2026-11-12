@@ -29,6 +29,9 @@ pub enum StorageError {
     MigrationFailed { version: u32 },
     /// The handle is already open for a different account (v1 has one account).
     OtherAccount,
+    /// An older unencrypted `settings.json` or `contacts.json` could not be
+    /// read, so nothing was imported and the file was left untouched.
+    LegacyImportFailed,
     /// File-system / SQLite I/O failure (permissions, disk full, symlink, lock).
     Io,
 }
@@ -47,6 +50,7 @@ impl fmt::Display for StorageError {
             Self::NewerSchema => "the database was written by a newer version",
             Self::MigrationFailed { .. } => "a database migration failed and was rolled back",
             Self::OtherAccount => "the database is open for a different account",
+            Self::LegacyImportFailed => "older unencrypted data could not be imported",
             Self::Io => "the database file could not be accessed",
         })
     }

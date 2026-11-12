@@ -3,10 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use messenger_core::contacts::testing::{MemoryContactStore, RecordingHistoryEraser};
+use messenger_core::contacts::SqlCipherContactStore;
 use messenger_core::discovery::{LiveTicketProvider, NodeConfig};
 use messenger_core::identity::testing::FakeKeychain;
 use messenger_core::identity::{
-    FileSettingsStore, KeychainStore, NodeIdTicketProvider, SettingsStore,
+    KeychainStore, MemorySettingsStore, NodeIdTicketProvider, SettingsStore, SqlCipherSettingsStore,
 };
 use messenger_core::messaging::{MessageStatus, MessageStore};
 use messenger_core::storage::DB_FILE;
@@ -17,15 +18,16 @@ use crate::contacts_cmd::ContactsState;
 use crate::net_cmd::{start_if_present, NetState};
 use crate::test_util::assert_forms_absent;
 
-type Service = IdentityService<Arc<FakeKeychain>, FileSettingsStore, NodeIdTicketProvider>;
+type Service = IdentityService<Arc<FakeKeychain>, SqlCipherSettingsStore, NodeIdTicketProvider>;
 
-/// The first-run wiring: the file settings store writes `settings.json`, which
-/// is what allows the first open to create the database.
+/// The first-run wiring: provisioning writes `provisioned_at` through the
+/// encrypted settings store, which creates the database.
 fn setup() -> (tempfile::TempDir, Arc<FakeKeychain>, Service) {
     let (dir, keychain) = (tempfile::tempdir().unwrap(), Arc::new(FakeKeychain::new()));
+    let storage = Arc::new(Storage::new(dir.path(), keychain.clone()));
     let service = IdentityService::new(
         keychain.clone(),
-        FileSettingsStore::new(dir.path()),
+        SqlCipherSettingsStore::new(storage),
         NodeIdTicketProvider,
         dir.path(),
     );
@@ -109,7 +111,6 @@ fn wrong_key_surfaces_error_and_keeps_file() {
 fn missing_db_surfaces_missing() {
     let (dir, keychain, service, _) = seeded();
     fs::remove_file(dir.path().join(DB_FILE)).unwrap();
-    fs::remove_file(dir.path().join("settings.json")).unwrap();
     let (storage, chat) = fresh(&dir, &keychain);
     let dto = status(&service, &storage, &chat);
     assert_eq!(error_kind(&dto), Some(StorageErrorKind::Missing));
@@ -164,6 +165,7 @@ fn reasons_name_no_path_or_detail() {
         StorageError::NewerSchema,
         StorageError::MigrationFailed { version: 2 },
         StorageError::OtherAccount,
+        StorageError::LegacyImportFailed,
         StorageError::Io,
     ] {
         let json = serde_json::to_string(&StorageStatusDto::from(err)).unwrap();
@@ -179,7 +181,7 @@ fn reasons_name_no_path_or_detail() {
 async fn start_if_present_does_not_start_node_when_storage_fails() {
     let (dir, keychain) = (tempfile::tempdir().unwrap(), Arc::new(FakeKeychain::new()));
     let tickets = LiveTicketProvider::new();
-    let settings = Arc::new(FileSettingsStore::new(dir.path()));
+    let settings = Arc::new(MemorySettingsStore::new());
     let service = IdentityService::new(
         keychain.clone(),
         settings.clone(),
@@ -188,7 +190,7 @@ async fn start_if_present_does_not_start_node_when_storage_fails() {
     );
     let account = service.provision().unwrap().account_id;
     Storage::new(dir.path(), keychain.clone())
-        .database(&account)
+        .database_creating(&account)
         .unwrap();
     let key = keychain.load_db_key(&account).unwrap();
     keychain.replace_db_key_with_random(&account);
@@ -219,4 +221,54 @@ async fn start_if_present_does_not_start_node_when_storage_fails() {
     assert!(start().await);
     assert!(state.node().is_ok());
     state.shutdown_with_timeout(Duration::from_secs(2)).await;
+}
+
+#[test]
+fn storage_status_reports_legacy_import_failure() {
+    let (dir, keychain, service) = setup();
+    let account = service.provision().unwrap().account_id;
+    let bad: &[u8] = b"{ not json";
+    fs::write(dir.path().join("contacts.json"), bad).unwrap();
+    let (storage, chat) = fresh(&dir, &keychain);
+
+    let dto = status(&service, &storage, &chat);
+    assert_eq!(error_kind(&dto), Some(StorageErrorKind::LegacyImportFailed));
+    assert!(chat.store_ref().is_err());
+    assert_eq!(fs::read(dir.path().join("contacts.json")).unwrap(), bad);
+    let json = serde_json::to_string(&dto).unwrap();
+    assert!(json.contains("nothing was imported"));
+    assert!(!json.contains("contacts.json"));
+
+    // Fixing the file and retrying recovers.
+    fs::remove_file(dir.path().join("contacts.json")).unwrap();
+    assert_eq!(retry(&service, &storage, &chat), StorageStatusDto::Ready);
+    assert!(chat.store_ref().is_ok());
+    let _ = account;
+}
+
+#[test]
+fn contacts_survive_restart_encrypted() {
+    let (dir, keychain, service) = setup();
+    let provisioned = service.provision().unwrap();
+    let peer = iroh::SecretKey::generate().public();
+    let build = || {
+        let storage = Arc::new(Storage::new(dir.path(), keychain.clone()));
+        let state = ContactsState::new(
+            Arc::new(SqlCipherContactStore::new(storage)),
+            Arc::new(RecordingHistoryEraser::new()),
+        );
+        let own = iroh::SecretKey::generate().public();
+        let book = state.bind(provisioned.account_id, own);
+        (state, book)
+    };
+    {
+        let (_state, book) = build();
+        book.add(peer, "Bobby", None).unwrap();
+    }
+    let (_state, book) = build();
+    let listed = book.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].node_id, peer);
+    assert_eq!(listed[0].nickname.as_str(), "Bobby");
+    assert!(!dir.path().join("contacts.json").exists());
 }

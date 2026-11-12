@@ -29,6 +29,7 @@ pub enum StorageErrorKind {
     NewerSchema,
     MigrationFailed,
     OtherAccount,
+    LegacyImportFailed,
     Io,
 }
 
@@ -56,6 +57,7 @@ fn kind_of(err: StorageError) -> Option<StorageErrorKind> {
         StorageError::NewerSchema => StorageErrorKind::NewerSchema,
         StorageError::MigrationFailed { .. } => StorageErrorKind::MigrationFailed,
         StorageError::OtherAccount => StorageErrorKind::OtherAccount,
+        StorageError::LegacyImportFailed => StorageErrorKind::LegacyImportFailed,
         StorageError::Io => StorageErrorKind::Io,
     })
 }
@@ -89,6 +91,9 @@ fn reason(kind: StorageErrorKind) -> &'static str {
         }
         StorageErrorKind::OtherAccount => {
             "The database is already open for a different account."
+        }
+        StorageErrorKind::LegacyImportFailed => {
+            "Older unencrypted app data could not be read, so it was left in place and nothing was imported. Your encrypted data is unchanged."
         }
         StorageErrorKind::Io => {
             "The database file could not be accessed. Check the app data folder permissions and disk space."
