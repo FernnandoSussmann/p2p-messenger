@@ -10,15 +10,14 @@ use std::sync::{Arc, OnceLock};
 
 use messenger_core::contacts::{HistoryEraseError, HistoryEraser};
 use messenger_core::discovery::{KnownPeers, Node};
-use messenger_core::identity::{
-    AccountId, IdentityService, KeychainStore, NodeId, SettingsStore, TicketProvider,
-};
+use messenger_core::identity::{AccountId, NodeId};
 use messenger_core::messaging::{
-    chat_event_json, history_page, open_message_store, parse_message_id, ChatEvent, HistoryCursor,
-    HistoryPageDto, MessageDto, MessageStatusDto, MessageStore, MessageStoreError, Messaging,
-    MessagingConfig, MessagingDeps, SendError, SqlCipherMessageStore, CHAT_RESYNC,
-    DEFAULT_SEARCH_RESULTS, MAX_SEARCH_RESULTS,
+    chat_event_json, history_page, parse_message_id, ChatEvent, HistoryCursor, HistoryPageDto,
+    MessageDto, MessageStatusDto, MessageStore, MessageStoreError, Messaging, MessagingConfig,
+    MessagingDeps, SendError, SqlCipherMessageStore, CHAT_RESYNC, DEFAULT_SEARCH_RESULTS,
+    MAX_SEARCH_RESULTS,
 };
+use messenger_core::storage::{Storage, StorageError};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
@@ -44,15 +43,12 @@ impl ChatState {
     }
 
     /// Idempotent: once a store is open, later calls do nothing.
-    pub fn open_store<K: KeychainStore, S: SettingsStore, T: TicketProvider>(
-        &self,
-        identity: &IdentityService<K, S, T>,
-    ) -> Result<(), MessageStoreError> {
+    pub fn open_store(&self, storage: &Storage, account: &AccountId) -> Result<(), StorageError> {
         if self.store.get().is_some() {
             return Ok(());
         }
-        let (account, store) = open_message_store(identity)?;
-        let _ = self.store.set((account, Arc::new(store)));
+        let store = SqlCipherMessageStore::new(storage.database(account)?);
+        let _ = self.store.set((*account, Arc::new(store)));
         Ok(())
     }
 

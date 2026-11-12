@@ -2,12 +2,10 @@
 //!
 //! All SQL is constant text; every value goes through a bound parameter.
 
-use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, MutexGuard};
 
 use protocol::{ChatMessage, MessageId};
 use rusqlite::{params, Connection, ErrorCode, Row};
-use zeroize::Zeroizing;
 
 use super::model::{
     validate_body, HistoryCursor, Insert, MessageDirection, MessageStatus, MessageStoreError,
@@ -15,15 +13,10 @@ use super::model::{
 };
 use super::store::{clean_query, MessageStore, MAX_PAGE, MAX_SEARCH_RESULTS};
 use crate::contacts::{HistoryEraseError, HistoryEraser};
-use crate::identity::{
-    AccountId, DbKey, IdentityService, KeychainStore, NodeId, SettingsStore, TicketProvider,
-};
+use crate::identity::{AccountId, NodeId};
+use crate::storage::Database;
 
-pub const DB_FILE: &str = "messenger.db";
-
-const SCHEMA_VERSION: i64 = 1; // keep in step with the user_version statement in `migrate`
-
-const SCHEMA_V1: &str = "
+pub(crate) const MIGRATION_MESSAGES_V1: &str = "
 CREATE TABLE messages (
   seq            INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id     BLOB    NOT NULL CHECK (length(account_id) = 16),
@@ -88,100 +81,17 @@ const SQL_UNDELIVERED: &str = concat!(
 const SQL_ERASE: &str = "DELETE FROM messages WHERE account_id = ?1 AND peer = ?2";
 const SQL_FTS_OPTIMIZE: &str = "INSERT INTO messages_fts (messages_fts) VALUES ('optimize')";
 
-/// Opens (creating if absent) the encrypted store in the identity's data dir,
-/// keyed with the keychain DB key. Never recreates or deletes an existing file.
-pub fn open_message_store<K: KeychainStore, S: SettingsStore, T: TicketProvider>(
-    identity: &IdentityService<K, S, T>,
-) -> Result<(AccountId, SqlCipherMessageStore), MessageStoreError> {
-    let (account, key) = identity
-        .load_db_key()
-        .map_err(|_| MessageStoreError::Unavailable)?;
-    let store = SqlCipherMessageStore::open_with_key(&identity.data_dir().join(DB_FILE), &key)?;
-    Ok((account, store))
-}
-
 pub struct SqlCipherMessageStore {
-    conn: Mutex<Connection>,
+    db: Arc<Database>,
 }
 
 impl SqlCipherMessageStore {
-    pub(crate) fn open_with_key(path: &Path, key: &DbKey) -> Result<Self, MessageStoreError> {
-        create_private_file(path)?;
-        let mut conn = Connection::open(path).map_err(|_| MessageStoreError::Unavailable)?;
-
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut sql = Zeroizing::new(String::with_capacity(16 + 64 + 3));
-        sql.push_str("PRAGMA key = \"x'");
-        for b in key.as_bytes() {
-            sql.push(HEX[usize::from(b >> 4)] as char);
-            sql.push(HEX[usize::from(b & 0x0f)] as char);
-        }
-        sql.push_str("'\";");
-        conn.execute_batch(&sql)
-            .map_err(|_| MessageStoreError::Unavailable)?;
-        drop(sql);
-
-        let version: Option<String> = conn
-            .query_row("PRAGMA cipher_version", [], |r| r.get(0))
-            .ok();
-        if version.is_none_or(|v| v.is_empty()) {
-            return Err(MessageStoreError::NotEncrypted);
-        }
-        conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
-            r.get::<_, i64>(0)
-        })
-        .map_err(|_| MessageStoreError::WrongKeyOrCorrupt)?;
-        conn.execute_batch(
-            "PRAGMA temp_store = MEMORY; PRAGMA secure_delete = ON; PRAGMA foreign_keys = ON;",
-        )
-        .map_err(|_| MessageStoreError::Unavailable)?;
-        migrate(&mut conn)?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+    pub fn new(db: Arc<Database>) -> Self {
+        Self { db }
     }
 
     fn conn(&self) -> Result<MutexGuard<'_, Connection>, MessageStoreError> {
-        self.conn.lock().map_err(|_| MessageStoreError::Unavailable)
-    }
-}
-
-/// On Unix a new file is created `0600`; an existing file is left untouched.
-fn create_private_file(path: &Path) -> Result<(), MessageStoreError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
-        {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(_) => return Err(MessageStoreError::Unavailable),
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
-}
-
-fn migrate(conn: &mut Connection) -> Result<(), MessageStoreError> {
-    let unavailable = |_| MessageStoreError::Unavailable;
-    let version: i64 = conn
-        .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .map_err(unavailable)?;
-    match version {
-        0 => {
-            let tx = conn.transaction().map_err(unavailable)?;
-            tx.execute_batch(SCHEMA_V1).map_err(unavailable)?;
-            tx.execute_batch("PRAGMA user_version = 1;")
-                .map_err(unavailable)?;
-            tx.commit().map_err(unavailable)
-        }
-        SCHEMA_VERSION => Ok(()),
-        _ => Err(MessageStoreError::NewerSchema),
+        self.db.conn().map_err(|_| MessageStoreError::Unavailable)
     }
 }
 
@@ -465,7 +375,7 @@ impl HistoryEraser for SqlCipherMessageStore {
         account: &AccountId,
         peer: &NodeId,
     ) -> Result<(), HistoryEraseError> {
-        let mut conn = self.conn.lock().map_err(|_| HistoryEraseError)?;
+        let mut conn = self.conn().map_err(|_| HistoryEraseError)?;
         let tx = conn.transaction().map_err(|_| HistoryEraseError)?;
         tx.execute(
             SQL_ERASE,

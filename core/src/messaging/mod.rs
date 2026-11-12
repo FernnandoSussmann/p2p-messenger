@@ -5,9 +5,8 @@
 //!   concurrently but persisted in accept order; outgoing messages go
 //!   Sending, then Delivered or Pending, then Failed. Messaging never dials:
 //!   re-establishing a channel is discovery's job.
-//! - **DD-05 seam.** [`MessageStore`] is the minimal, clearly-labelled seam for
-//!   DD-05: one encrypted `messages` table and nothing else. DD-05 later moves
-//!   the table into its single database and migration framework.
+//! - **Storage.** [`MessageStore`] is backed by one encrypted `messages` table;
+//!   the table lives in `storage`'s single DB as migration 1.
 //! - **Bodies live only inside the SQLCipher file**, and every row and every
 //!   query is scoped by `account_id`.
 //! - **Dedupe is a storage invariant**: `UNIQUE(account_id, peer, message_id)`.
@@ -50,7 +49,8 @@ pub use model::{
 };
 pub use protocol::{MessageId, MAX_BODY_BYTES};
 pub use service::{Messaging, MessagingDeps, SendError};
-pub use sqlcipher::{open_message_store, SqlCipherMessageStore, DB_FILE};
+pub use sqlcipher::SqlCipherMessageStore;
+pub(crate) use sqlcipher::MIGRATION_MESSAGES_V1;
 pub use store::{
     history_page, HistoryPage, MessageStore, DEFAULT_PAGE, DEFAULT_SEARCH_RESULTS, MAX_PAGE,
     MAX_SEARCH_QUERY_CHARS, MAX_SEARCH_RESULTS,

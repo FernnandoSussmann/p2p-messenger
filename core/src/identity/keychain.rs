@@ -5,6 +5,7 @@
 //! account as `<account_id>/identity-key` and `<account_id>/db-key`.
 
 use std::fmt;
+use std::sync::Arc;
 
 use keyring_core::Entry;
 use zeroize::Zeroizing;
@@ -58,6 +59,37 @@ pub trait KeychainStore {
     fn load_db_key(&self, id: &AccountId) -> Result<DbKey, KeychainError>;
     fn delete_identity_key(&self, id: &AccountId) -> Result<(), KeychainError>;
     fn delete_db_key(&self, id: &AccountId) -> Result<(), KeychainError>;
+}
+
+/// Lets the identity service and other slices share one keychain handle.
+impl<T: KeychainStore + ?Sized> KeychainStore for Arc<T> {
+    fn store_identity_key(
+        &self,
+        id: &AccountId,
+        key: &SecretKeyBytes,
+    ) -> Result<(), KeychainError> {
+        (**self).store_identity_key(id, key)
+    }
+
+    fn store_db_key(&self, id: &AccountId, key: &DbKey) -> Result<(), KeychainError> {
+        (**self).store_db_key(id, key)
+    }
+
+    fn load_identity_key(&self, id: &AccountId) -> Result<SecretKeyBytes, KeychainError> {
+        (**self).load_identity_key(id)
+    }
+
+    fn load_db_key(&self, id: &AccountId) -> Result<DbKey, KeychainError> {
+        (**self).load_db_key(id)
+    }
+
+    fn delete_identity_key(&self, id: &AccountId) -> Result<(), KeychainError> {
+        (**self).delete_identity_key(id)
+    }
+
+    fn delete_db_key(&self, id: &AccountId) -> Result<(), KeychainError> {
+        (**self).delete_db_key(id)
+    }
 }
 
 /// [`KeychainStore`] backed by the default `keyring` credential store.
@@ -140,7 +172,7 @@ impl KeychainStore for OsKeychain {
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing {
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     use super::*;
 
@@ -164,6 +196,14 @@ pub mod testing {
         /// Makes every later operation return the error built by `make_error`.
         pub fn fail_with(&self, make_error: fn() -> KeychainError) {
             *self.fail_with.lock().unwrap() = Some(make_error);
+        }
+
+        /// Overwrites the stored DB key with a random one (simulates a wrong key).
+        pub fn replace_db_key_with_random(&self, id: &AccountId) {
+            self.entries
+                .lock()
+                .unwrap()
+                .insert(account_name(id, DB_KEY_SUFFIX), rand::random::<[u8; 32]>());
         }
 
         fn check(&self) -> Result<(), KeychainError> {
@@ -199,37 +239,6 @@ pub mod testing {
                 .unwrap()
                 .remove(&account_name(id, suffix));
             removed.map(|_| ()).ok_or(KeychainError::NotFound)
-        }
-    }
-
-    /// Lets a test keep a handle to the fake while the service owns a clone.
-    impl KeychainStore for Arc<FakeKeychain> {
-        fn store_identity_key(
-            &self,
-            id: &AccountId,
-            key: &SecretKeyBytes,
-        ) -> Result<(), KeychainError> {
-            self.as_ref().store_identity_key(id, key)
-        }
-
-        fn store_db_key(&self, id: &AccountId, key: &DbKey) -> Result<(), KeychainError> {
-            self.as_ref().store_db_key(id, key)
-        }
-
-        fn load_identity_key(&self, id: &AccountId) -> Result<SecretKeyBytes, KeychainError> {
-            self.as_ref().load_identity_key(id)
-        }
-
-        fn load_db_key(&self, id: &AccountId) -> Result<DbKey, KeychainError> {
-            self.as_ref().load_db_key(id)
-        }
-
-        fn delete_identity_key(&self, id: &AccountId) -> Result<(), KeychainError> {
-            self.as_ref().delete_identity_key(id)
-        }
-
-        fn delete_db_key(&self, id: &AccountId) -> Result<(), KeychainError> {
-            self.as_ref().delete_db_key(id)
         }
     }
 
