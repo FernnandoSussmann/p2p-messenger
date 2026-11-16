@@ -4,6 +4,9 @@
 [workspace]
 resolver = "2"
 members = ["protocol", "core", "headless", "app/src-tauri"]
+# `headless` is test-only: `--workspace` and `-p messenger-headless` still see it,
+# but plain `cargo build` / `cargo check` and `npm start` never compile it (DD-06 §2).
+default-members = ["protocol", "core", "app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -37,5 +40,20 @@ tauri-plugin-clipboard-manager = "2"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 rusqlite = { version = "0.42", features = ["bundled-sqlcipher-vendored-openssl"] }
 
+# Dev (and `test`, which inherits it): line tables for our crates, so panic
+# backtraces keep file:line. Third-party crates: no debug info, size-optimized.
+# Full DWARF for a local debugging session: CARGO_PROFILE_DEV_DEBUG=true (never commit).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+opt-level = "s"
+
+# End-user binary (also the Docker headless image). panic stays "unwind": abort
+# would kill the app on a contained tokio-task panic and skip zeroizing Drops.
 [profile.release]
 strip = true
+lto = "fat"
+codegen-units = 1
+opt-level = "s"

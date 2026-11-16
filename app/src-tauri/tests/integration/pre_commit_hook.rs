@@ -26,7 +26,7 @@ fn pre_commit_hook_exists_is_executable_and_runs_all_gates() {
     let required = [
         "set -euo pipefail",
         "cargo fmt --all --check",
-        "cargo clippy --all-targets --all-features -- -D warnings",
+        "cargo clippy --workspace --all-targets --all-features -- -D warnings",
         "cargo test --workspace",
         "cargo build",
         secret_gate.as_str(),

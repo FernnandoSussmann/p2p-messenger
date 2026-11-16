@@ -683,7 +683,7 @@ fn lan_events_are_debounced() {
 }
 
 #[test]
-#[ignore = "needs a multicast-capable interface; run: cargo test -p core --test discovery_lan -- --ignored"]
+#[ignore = "needs a multicast-capable interface; run: cargo test -p core --test integration discovery_lan -- --ignored"]
 fn real_mdns_two_nodes_discover_each_other() {
     run(async {
         let options = || {

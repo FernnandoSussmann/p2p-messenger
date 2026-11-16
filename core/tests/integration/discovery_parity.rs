@@ -1,5 +1,5 @@
 //! Level-1 run of the parity scenarios, with real iroh endpoints on loopback
-//! in one process. `headless/tests/parity.rs` runs the same scenarios against
+//! in one process. `headless/tests/integration/parity.rs` runs the same scenarios against
 //! real headless processes. The package name `core` shadows std `core`, which
 //! breaks `#[tokio::test]`, so tests run through `run`.
 
