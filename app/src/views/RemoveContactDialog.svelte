@@ -2,6 +2,7 @@
   import type { ContactDto, RemoveContactDto } from "../contacts";
   import { contactsRemove, describeContactsError } from "../contacts";
   import { refreshContacts } from "../lib/contactsStore";
+  import { HISTORY_DELETE_GUARANTEE } from "../lib/historyCopy";
 
   interface Props {
     contact: ContactDto;
@@ -41,6 +42,7 @@
   </label>
   {#if eraseHistory}
     <p>Your message history with them will be <strong>permanently deleted</strong>. This cannot be undone.</p>
+    <p>{HISTORY_DELETE_GUARANTEE}</p>
   {:else}
     <p>Your message history with them will be <strong>kept</strong>.</p>
   {/if}

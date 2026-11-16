@@ -13,7 +13,7 @@ use crate::discovery::testing::KnownFactory;
 use crate::discovery::KnownPeers;
 use crate::identity::{AccountId, NodeId};
 
-/// In-memory store with the same contract as `FileContactStore`, including
+/// In-memory store with the same contract as `SqlCipherContactStore`, including
 /// `insert_missing` atomicity, caps and observe throttling.
 pub struct MemoryContactStore {
     state: Mutex<Ledger>,
@@ -283,10 +283,13 @@ impl BookCell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contacts::contract::contract_suite;
+    use crate::contacts::contract::{concurrent_observers, contract_suite, isolation_suite};
 
     #[test]
     fn contract_memory() {
-        contract_suite(&MemoryContactStore::new());
+        let store = MemoryContactStore::new();
+        contract_suite(&store, AccountId::new());
+        isolation_suite(&store, AccountId::new(), &store, AccountId::new());
+        concurrent_observers(&store, AccountId::new());
     }
 }

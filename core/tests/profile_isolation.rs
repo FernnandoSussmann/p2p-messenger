@@ -6,10 +6,13 @@
 use std::path::Path;
 use std::sync::Once;
 
+use std::sync::Arc;
+
 use core::identity::{
-    AccountId, DbKey, FileSettingsStore, IdentityService, IdentityStatus, KeychainError,
-    KeychainStore, NodeIdTicketProvider, OsKeychain, Profile, APP_KEYCHAIN_SERVICE,
+    AccountId, DbKey, IdentityService, IdentityStatus, KeychainError, KeychainStore,
+    NodeIdTicketProvider, OsKeychain, Profile, SqlCipherSettingsStore, APP_KEYCHAIN_SERVICE,
 };
+use core::storage::{KeySource, Storage, StorageError};
 
 fn install_mock_store() {
     static INSTALL: Once = Once::new();
@@ -78,9 +81,11 @@ fn profiles_provision_distinct_identities_in_separate_data_dirs() {
     let service = |p: &Profile| {
         let dir = p.data_dir(base.path());
         std::fs::create_dir_all(&dir).unwrap();
+        let keychain = Arc::new(OsKeychain::native_for(Some(p)).unwrap());
+        let storage = Arc::new(Storage::new(dir.clone(), keychain.clone()));
         let svc = IdentityService::new(
-            OsKeychain::native_for(Some(p)).unwrap(),
-            FileSettingsStore::new(dir.clone()),
+            keychain,
+            SqlCipherSettingsStore::new(storage),
             NodeIdTicketProvider,
             dir.clone(),
         );
@@ -111,6 +116,42 @@ fn profiles_provision_distinct_identities_in_separate_data_dirs() {
 
     assert!(matches!(svc_a.status(), IdentityStatus::Present { .. }));
     assert!(matches!(svc_b.status(), IdentityStatus::Present { .. }));
+
+    // Each profile's encrypted database opens only with its own key.
+    struct Borrowed([u8; 32]);
+    impl KeySource for Borrowed {
+        fn db_key(&self, _: &AccountId) -> Result<DbKey, KeychainError> {
+            Ok(DbKey::from_bytes(self.0))
+        }
+    }
+    let key_of = |p: &Profile, id: &AccountId| {
+        *OsKeychain::native_for(Some(p))
+            .unwrap()
+            .load_db_key(id)
+            .unwrap()
+            .as_bytes()
+    };
+    let cross = |dir: &Path, key: [u8; 32], id: &AccountId| {
+        Storage::new(dir, Arc::new(Borrowed(key)))
+            .database(id)
+            .err()
+    };
+    assert_eq!(
+        cross(&dir_a, key_of(&b, &pb.account_id), &pa.account_id),
+        Some(StorageError::WrongKeyOrCorrupt)
+    );
+    assert_eq!(
+        cross(&dir_b, key_of(&a, &pa.account_id), &pb.account_id),
+        Some(StorageError::WrongKeyOrCorrupt)
+    );
+    assert_eq!(
+        cross(&dir_a, key_of(&a, &pa.account_id), &pa.account_id),
+        None
+    );
+    assert_eq!(
+        cross(&dir_b, key_of(&b, &pb.account_id), &pb.account_id),
+        None
+    );
 }
 
 #[test]

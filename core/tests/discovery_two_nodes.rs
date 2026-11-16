@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use core::contacts::testing::BookCell;
-use core::contacts::{accept_incoming, FileContactStore, NoMessageStore, TrustState};
+use core::contacts::{
+    accept_incoming, ContactStore, NoMessageStore, SqlCipherContactStore, TrustState,
+};
 use core::discovery::testing::{
     hello_frame, next_event, raw_dial, restart, spawn_test_node_with, FailingKnownPeers,
     MemoryAddressLookup, MemoryKnownPeers, TestNode, TestOptions,
@@ -17,7 +19,10 @@ use core::discovery::{
     event_json, ConnectError, ConnectionState, Direction, FailureReason, GateLimits, MyTicketDto,
     NetEvent, CLOSE_PROTOCOL,
 };
-use core::identity::{KeychainStore, NodeId, Ticket};
+use core::identity::{
+    AccountId, DbKey, IdentityStatus, KeychainError, KeychainStore, NodeId, Ticket,
+};
+use core::storage::{KeySource, Storage};
 use iroh::endpoint::ConnectionError;
 use protocol::{new_message_id, ChatMessage, Envelope, Payload};
 use tokio::sync::broadcast::Receiver;
@@ -39,17 +44,32 @@ async fn node(name: &str) -> (TestNode, Arc<MemoryKnownPeers>) {
     (spawn_test_node_with(name, options).await, known)
 }
 
-/// A node whose trust store is a `ContactBook` over a file store in `dir`.
-async fn contacts_node(name: &str, dir: &Path) -> (TestNode, BookCell) {
+/// A node whose trust store is a `ContactBook` over the encrypted contact
+/// store in `dir`.
+async fn contacts_node(name: &str, dir: &Path, keys: &Arc<FixedKey>) -> (TestNode, BookCell) {
     let cell = BookCell::new();
+    let storage = Arc::new(Storage::new(dir, keys.clone()));
     let factory = cell.known_factory(
-        Arc::new(FileContactStore::new(dir)),
+        Arc::new(SqlCipherContactStore::new(storage)),
         Arc::new(NoMessageStore),
     );
     let options = TestOptions::default().with_known_factory(factory);
     (spawn_test_node_with(name, options).await, cell)
 }
 
+/// One fixed DB key for every account of a test, so a second `Storage` over
+/// the same directory can reopen what the first wrote.
+struct FixedKey([u8; 32]);
+
+impl KeySource for FixedKey {
+    fn db_key(&self, _: &AccountId) -> Result<DbKey, KeychainError> {
+        Ok(DbKey::from_bytes(self.0))
+    }
+}
+
+fn new_keys() -> Arc<FixedKey> {
+    Arc::new(FixedKey(rand::random()))
+}
 fn accept(node: &TestNode, cell: &BookCell, peer: &NodeId, nickname: &str) {
     accept_incoming(&cell.get(), &node.node, peer, nickname).unwrap();
 }
@@ -314,7 +334,8 @@ fn pending_prompt_expires() {
 fn known_peer_reconnects_silently_across_restart() {
     run(async {
         let known_dir = tempfile::tempdir().unwrap();
-        let (a, cell) = contacts_node("Alice", known_dir.path()).await;
+        let keys = new_keys();
+        let (a, cell) = contacts_node("Alice", known_dir.path(), &keys).await;
         let (b, _) = node("Bob").await;
         let (mut ea, mut eb) = (a.node.subscribe(), b.node.subscribe());
 
@@ -327,10 +348,25 @@ fn known_peer_reconnects_silently_across_restart() {
         )
         .await;
         let a_id = a.id();
-        assert!(known_dir.path().join("contacts.json").is_file());
+        let IdentityStatus::Present { account_id, .. } = a.identity.status() else {
+            panic!("provisioned")
+        };
+        assert!(!known_dir.path().join("contacts.json").exists());
 
         let a = restart(a).await;
         assert_eq!(a.id(), a_id);
+        // A fresh handle on the same encrypted file lists the contact.
+        let reopened =
+            SqlCipherContactStore::new(Arc::new(Storage::new(known_dir.path(), keys.clone())));
+        assert_eq!(
+            reopened
+                .get(&account_id, &b.id())
+                .unwrap()
+                .unwrap()
+                .nickname
+                .as_str(),
+            "Bobby"
+        );
         wait_for(
             &mut eb,
             state_is(a_id, Direction::Outbound, ConnectionState::Disconnected),
@@ -617,7 +653,7 @@ fn dialed_peer_is_remembered_only_after_a_valid_reply() {
     run(async {
         let (a, _) = node("Alice").await;
         let dir_b = tempfile::tempdir().unwrap();
-        let (b, cell_b) = contacts_node("Bob", dir_b.path()).await;
+        let (b, cell_b) = contacts_node("Bob", dir_b.path(), &new_keys()).await;
         let (mut ea, mut eb) = (a.node.subscribe(), b.node.subscribe());
 
         b.node.connect_ticket(&ticket(&a)).unwrap();

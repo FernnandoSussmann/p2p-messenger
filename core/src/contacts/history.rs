@@ -4,9 +4,10 @@ use std::fmt;
 
 use crate::identity::{AccountId, NodeId};
 
-/// Deletes a peer's stored conversation. DD-05 owns the real implementation
-/// (same path as `history_clear`, with page reclaim). Contract: idempotent
-/// (erasing nothing is Ok) and all-or-nothing.
+/// Removes the peer's rows and FTS postings, then reclaims pages. Idempotent
+/// (erasing nothing is Ok); all-or-nothing for rows. Shared by `history_clear`
+/// and "Remove contact, also delete history". Reclaim rewrites the whole file,
+/// so async callers must use `spawn_blocking`.
 pub trait HistoryEraser: Send + Sync + 'static {
     fn erase_peer_history(
         &self,

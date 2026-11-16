@@ -13,6 +13,8 @@ pub const MAX_SEARCH_RESULTS: usize = 100;
 pub const MAX_SEARCH_QUERY_CHARS: usize = 128;
 
 /// Blocking API; async callers use `spawn_blocking`, like contacts.
+/// `erase_peer_history` removes the peer's rows and FTS postings, then reclaims
+/// pages. Idempotent. All-or-nothing for rows.
 pub trait MessageStore: HistoryEraser {
     /// New outgoing row (status Sending or Pending). Duplicate id for the peer
     /// is `AlreadyExists`.

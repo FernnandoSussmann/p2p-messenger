@@ -1,10 +1,20 @@
+use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use super::database::{Create, Database};
+use super::legacy;
 use super::schema::{MIGRATIONS, SCHEMA_VERSION};
 use super::{StorageError, DB_FILE};
-use crate::identity::{read_marker, AccountId, DbKey, KeychainError, KeychainStore};
+use crate::contacts::SQL_CONTACTS_COUNT_ALL;
+use crate::identity::{
+    read_marker, AccountId, DbKey, KeychainError, KeychainStore, SQL_SETTINGS_COUNT_OTHERS,
+};
+
+/// Rows of any account: user data that provisioning must not discard. The
+/// predicate is always true (the column is NOT NULL); it names the namespace
+/// column to keep the scoping guard honest.
+const SQL_MESSAGES_COUNT_ALL: &str = "SELECT count(*) FROM messages WHERE account_id IS NOT NULL";
 
 /// Loads the DB key for an account. Blanket-implemented for every keychain, so
 /// the app passes its keychain `Arc` without ever naming the key type. The
@@ -40,11 +50,21 @@ enum Slot {
     Failed(StorageError),
 }
 
+struct State {
+    slot: Slot,
+    /// The account whose open created `messenger.db`, even if that open
+    /// failed later. Only a file created by the failed provisioning attempt
+    /// may be discarded.
+    last_created: Option<AccountId>,
+    /// A discard that found another live handle; retried by the next open.
+    pending_discard: Option<(AccountId, Weak<Database>)>,
+}
+
 /// A lazily opened, process-wide handle to the encrypted database.
 pub struct Storage {
     data_dir: PathBuf,
     keys: Arc<dyn KeySource>,
-    slot: Mutex<Slot>,
+    state: Mutex<State>,
 }
 
 impl Storage {
@@ -52,7 +72,11 @@ impl Storage {
         Self {
             data_dir: data_dir.into(),
             keys,
-            slot: Mutex::new(Slot::Closed),
+            state: Mutex::new(State {
+                slot: Slot::Closed,
+                last_created: None,
+                pending_discard: None,
+            }),
         }
     }
 
@@ -65,7 +89,7 @@ impl Storage {
     }
 
     pub fn status(&self) -> StorageStatus {
-        match &*self.slot() {
+        match &self.state().slot {
             Slot::Closed => StorageStatus::NotOpened,
             Slot::Open { .. } => StorageStatus::Ready,
             Slot::Failed(e) => StorageStatus::Failed(*e),
@@ -74,9 +98,9 @@ impl Storage {
 
     /// Clears a latched failure so the next `database` call opens again.
     pub fn retry(&self) {
-        let mut slot = self.slot();
-        if matches!(*slot, Slot::Failed(_)) {
-            *slot = Slot::Closed;
+        let mut state = self.state();
+        if matches!(state.slot, Slot::Failed(_)) {
+            state.slot = Slot::Closed;
         }
     }
 
@@ -87,8 +111,8 @@ impl Storage {
         self.open_with(account, true)
     }
 
-    fn slot(&self) -> MutexGuard<'_, Slot> {
-        self.slot.lock().unwrap_or_else(|p| p.into_inner())
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     fn open_with(
@@ -96,8 +120,9 @@ impl Storage {
         account: &AccountId,
         force_create: bool,
     ) -> Result<Arc<Database>, StorageError> {
-        let mut slot = self.slot();
-        match &*slot {
+        let mut state = self.state();
+        self.retry_pending_discard(&mut state)?;
+        match &state.slot {
             Slot::Open { account: a, db } => {
                 return if a == account {
                     Ok(Arc::clone(db))
@@ -108,10 +133,15 @@ impl Storage {
             Slot::Failed(e) => return Err(*e),
             Slot::Closed => {}
         }
-        match self.try_open(account, force_create) {
+        let mut created = false;
+        let opened = self.try_open(account, force_create, &mut created);
+        if created {
+            state.last_created = Some(*account);
+        }
+        match opened {
             Ok(db) => {
                 tracing::info!(schema = SCHEMA_VERSION, "storage opened");
-                *slot = Slot::Open {
+                state.slot = Slot::Open {
                     account: *account,
                     db: Arc::clone(&db),
                 };
@@ -119,7 +149,7 @@ impl Storage {
             }
             Err(e) => {
                 tracing::warn!(error = %e, "storage unavailable");
-                *slot = Slot::Failed(e);
+                state.slot = Slot::Failed(e);
                 Err(e)
             }
         }
@@ -129,6 +159,7 @@ impl Storage {
         &self,
         account: &AccountId,
         force_create: bool,
+        created: &mut bool,
     ) -> Result<Arc<Database>, StorageError> {
         let key = self.keys.db_key(account)?;
         let create = if force_create || self.may_create() {
@@ -136,7 +167,111 @@ impl Storage {
         } else {
             Create::Forbidden
         };
-        Database::open(&self.data_dir.join(DB_FILE), &key, MIGRATIONS, create).map(Arc::new)
+        let db = Database::open_reporting(
+            &self.data_dir.join(DB_FILE),
+            &key,
+            MIGRATIONS,
+            create,
+            created,
+        )?;
+        legacy::import_all(&db, &self.data_dir)?;
+        Ok(Arc::new(db))
+    }
+
+    /// Undoes the storage side of a failed provisioning of `account`.
+    ///
+    /// Always resets the slot to `Closed`, so the next attempt (a new
+    /// `AccountId`) never meets a stale latched failure or `OtherAccount`.
+    /// Deletes the file only if this attempt created it, no marker exists, it
+    /// holds no user data and nobody else holds the handle. Anything else is
+    /// kept. If only the sole-handle check fails, the deletion is retried by
+    /// the next `database` call once the other handle is gone; until then that
+    /// call returns an unlatched `Io`.
+    pub(crate) fn discard_provisioning(&self, account: &AccountId) -> Result<(), StorageError> {
+        let mut state = self.state();
+        let slot = std::mem::replace(&mut state.slot, Slot::Closed);
+        if state.last_created != Some(*account) || !matches!(read_marker(&self.data_dir), Ok(None))
+        {
+            return Ok(());
+        }
+        let path = self.data_dir.join(DB_FILE);
+        match slot {
+            Slot::Open { db, .. } => {
+                if holds_user_data(&db, account)? {
+                    return Ok(());
+                }
+                match Arc::try_unwrap(db) {
+                    Ok(db) => {
+                        drop(db);
+                        self.delete_files(&mut state)
+                    }
+                    Err(shared) => {
+                        state.pending_discard = Some((*account, Arc::downgrade(&shared)));
+                        Ok(())
+                    }
+                }
+            }
+            Slot::Failed(_) => match fs::metadata(&path) {
+                Ok(m) if m.is_file() && m.len() == 0 => self.delete_files(&mut state),
+                _ => Ok(()),
+            },
+            Slot::Closed => Ok(()),
+        }
+    }
+
+    fn delete_files(&self, state: &mut State) -> Result<(), StorageError> {
+        let base = self.data_dir.join(DB_FILE);
+        for suffix in ["", "-journal", "-wal", "-shm"] {
+            let mut name = base.clone().into_os_string();
+            name.push(suffix);
+            match fs::remove_file(&name) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(StorageError::Io),
+            }
+        }
+        state.last_created = None;
+        state.pending_discard = None;
+        Ok(())
+    }
+
+    /// While the marker is still absent, finishes a deferred discard once the
+    /// extra handle is gone; while it is alive, fails with an unlatched `Io`.
+    fn retry_pending_discard(&self, state: &mut State) -> Result<(), StorageError> {
+        let Some((account, weak)) = &state.pending_discard else {
+            return Ok(());
+        };
+        let account = *account;
+        if !matches!(read_marker(&self.data_dir), Ok(None)) || state.last_created != Some(account) {
+            state.pending_discard = None;
+            return Ok(());
+        }
+        if weak.strong_count() > 0 {
+            return Err(StorageError::Io);
+        }
+        if !self.still_discardable(&account) {
+            state.pending_discard = None;
+            return Ok(());
+        }
+        self.delete_files(state)
+    }
+
+    /// Reopens the file without creating it and re-checks for user data.
+    /// Anything unexpected keeps the file.
+    fn still_discardable(&self, account: &AccountId) -> bool {
+        let Ok(key) = self.keys.db_key(account) else {
+            return false;
+        };
+        let Ok(db) = Database::open_reporting(
+            &self.data_dir.join(DB_FILE),
+            &key,
+            MIGRATIONS,
+            Create::Forbidden,
+            &mut false,
+        ) else {
+            return false;
+        };
+        matches!(holds_user_data(&db, account), Ok(false))
     }
 
     /// Creation is allowed only while provisioning (no marker yet) or while
@@ -146,4 +281,21 @@ impl Storage {
         matches!(read_marker(&self.data_dir), Ok(None))
             || LEGACY_FILES.iter().any(|f| self.data_dir.join(f).exists())
     }
+}
+
+/// Any message, contact or other account's settings: data a failed
+/// provisioning must never delete.
+fn holds_user_data(db: &Database, account: &AccountId) -> Result<bool, StorageError> {
+    let conn = db.conn()?;
+    let count = |sql: &str, others: bool| -> Result<i64, StorageError> {
+        let result = if others {
+            conn.query_row(sql, [account.as_uuid().as_bytes().as_slice()], |r| r.get(0))
+        } else {
+            conn.query_row(sql, [], |r| r.get(0))
+        };
+        result.map_err(|_| StorageError::Io)
+    };
+    Ok(count(SQL_MESSAGES_COUNT_ALL, false)? != 0
+        || count(SQL_CONTACTS_COUNT_ALL, false)? != 0
+        || count(SQL_SETTINGS_COUNT_OTHERS, true)? != 0)
 }

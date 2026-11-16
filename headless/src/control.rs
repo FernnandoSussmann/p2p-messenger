@@ -24,7 +24,7 @@ const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 const DEFAULT_WAIT_SECS: u64 = 30;
 const CLIENT_SLACK: Duration = Duration::from_secs(10);
 
-const KNOWN_COMMANDS: [&str; 9] = [
+const KNOWN_COMMANDS: [&str; 10] = [
     "node-id",
     "ticket",
     "presence",
@@ -32,6 +32,7 @@ const KNOWN_COMMANDS: [&str; 9] = [
     "connect",
     "respond",
     "connected",
+    "contacts",
     "wait",
     "shutdown",
 ];
@@ -56,6 +57,11 @@ pub enum Request {
         nickname: Option<String>,
     },
     Connected,
+    /// Test-only: the contact list as `[{node_id, nickname}]`. The contacts
+    /// live in the encrypted database, so tests ask the node instead of
+    /// reading a file. Nicknames on the local socket are acceptable because
+    /// this node is never shipped.
+    Contacts,
     Wait {
         event: String,
         #[serde(default)]
@@ -116,6 +122,7 @@ impl From<&CtlCommand> for Request {
                 nickname: nickname.clone(),
             },
             CtlCommand::Connected => Request::Connected,
+            CtlCommand::Contacts => Request::Contacts,
             CtlCommand::Wait(w) => Request::Wait {
                 event: w.event.name().to_owned(),
                 node: w.node.clone(),
@@ -311,6 +318,7 @@ mod tests {
     fn requests_round_trip_from_ctl_commands() {
         let cases = [
             CtlCommand::NodeId,
+            CtlCommand::Contacts,
             CtlCommand::Presence(Some(false)),
             CtlCommand::Connect("p2pm:x".into()),
             CtlCommand::Respond {

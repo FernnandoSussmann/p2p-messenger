@@ -23,17 +23,32 @@ pub struct Database {
 }
 
 impl Database {
-    /// Opens the keyed DB at `path` and migrates it with `migrations`. Creates
-    /// the file only when `create` is `Create::Allowed`; an absent file
-    /// otherwise is `Missing`. Never truncates, deletes or recreates an
-    /// existing file.
+    /// [`Database::open_reporting`] without the `created` report.
+    #[cfg(test)]
     pub(crate) fn open(
         path: &Path,
         key: &DbKey,
         migrations: &[Migration],
         create: Create,
     ) -> Result<Self, StorageError> {
-        let had_data = ensure_private_regular_file(path, create)?;
+        Self::open_reporting(path, key, migrations, create, &mut false)
+    }
+
+    /// Opens the keyed DB at `path` and migrates it with `migrations`. Creates
+    /// the file only when `create` is `Create::Allowed`; an absent file
+    /// otherwise is `Missing`. Never truncates, deletes or recreates an
+    /// existing file. `created` is set as soon as this call created the file,
+    /// even if the open fails afterwards.
+    pub(crate) fn open_reporting(
+        path: &Path,
+        key: &DbKey,
+        migrations: &[Migration],
+        create: Create,
+        created: &mut bool,
+    ) -> Result<Self, StorageError> {
+        let state = ensure_private_regular_file(path, create)?;
+        *created = state.created;
+        let had_data = state.had_data;
         // No SQLITE_OPEN_CREATE (the file exists already) and no SQLITE_OPEN_URI.
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let mut conn = Connection::open_with_flags(path, flags).map_err(|_| StorageError::Io)?;
@@ -64,6 +79,25 @@ impl Database {
 
     pub(crate) fn conn(&self) -> Result<MutexGuard<'_, Connection>, StorageError> {
         self.conn.lock().map_err(|_| StorageError::Io)
+    }
+
+    /// Rebuilds the file so no free page can hold deleted ciphertext. Must run
+    /// outside any transaction and without the guard from [`Database::conn`]
+    /// held. It holds the connection for the whole rebuild and, with
+    /// `temp_store=MEMORY`, keeps the rebuild image in RAM, so async callers
+    /// must use `spawn_blocking`.
+    pub(crate) fn reclaim(&self) -> Result<(), StorageError> {
+        let conn = self.conn()?;
+        conn.execute_batch("VACUUM;")
+            .map_err(|_| StorageError::Io)?;
+        let free: i64 = conn
+            .pragma_query_value(None, "freelist_count", |r| r.get(0))
+            .map_err(|_| StorageError::Io)?;
+        if free == 0 {
+            Ok(())
+        } else {
+            Err(StorageError::Io)
+        }
     }
 }
 
@@ -115,10 +149,16 @@ fn verify_session_pragmas(conn: &Connection) -> Result<(), StorageError> {
     Ok(())
 }
 
-/// Returns whether the file held data before this call. Refuses symlinks and
-/// non-regular files; creates the file `0600` only when `create` allows it and
-/// tightens loose modes on an existing file (Unix).
-fn ensure_private_regular_file(path: &Path, create: Create) -> Result<bool, StorageError> {
+struct FileState {
+    /// The file held data before this call.
+    had_data: bool,
+    /// This call created the file.
+    created: bool,
+}
+
+/// Refuses symlinks and non-regular files; creates the file `0600` only when
+/// `create` allows it and tightens loose modes on an existing file (Unix).
+fn ensure_private_regular_file(path: &Path, create: Create) -> Result<FileState, StorageError> {
     match fs::symlink_metadata(path) {
         Ok(meta) => {
             if !meta.file_type().is_file() {
@@ -132,14 +172,20 @@ fn ensure_private_regular_file(path: &Path, create: Create) -> Result<bool, Stor
                         .map_err(|_| StorageError::Io)?;
                 }
             }
-            Ok(meta.len() > 0)
+            Ok(FileState {
+                had_data: meta.len() > 0,
+                created: false,
+            })
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if create == Create::Forbidden {
                 return Err(StorageError::Missing);
             }
             create_new_private(path)?;
-            Ok(false)
+            Ok(FileState {
+                had_data: false,
+                created: true,
+            })
         }
         Err(_) => Err(StorageError::Io),
     }

@@ -11,6 +11,7 @@ export type StorageErrorKind =
   | "NewerSchema"
   | "MigrationFailed"
   | "OtherAccount"
+  | "LegacyImportFailed"
   | "Io";
 
 export type StorageStatusDto =

@@ -118,6 +118,8 @@ fn chat_errors_serialize_with_type_tag() {
         (ChatCmdError::NotResendable, "NotResendable"),
         (ChatCmdError::InvalidQuery, "InvalidQuery"),
         (ChatCmdError::ContactsUnavailable, "ContactsUnavailable"),
+        (ChatCmdError::NotConfirmed, "NotConfirmed"),
+        (ChatCmdError::HistoryClearFailed, "HistoryClearFailed"),
         (ChatCmdError::Internal, "Internal"),
     ] {
         assert_eq!(serde_json::to_value(err).unwrap(), json!({ "type": tag }));
@@ -499,4 +501,109 @@ async fn shutdown_with_messaging_completes() {
     .await
     .expect("shutdown completes");
     assert!(a.state.node().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn history_clear_requires_confirmation() {
+    let a = started_with_chat("Alice").await;
+    let peer = stranger();
+    seed(&a, &peer, 3, |i| i);
+    assert_eq!(
+        clear(&a.chat, &peer.to_string(), false).await.unwrap_err(),
+        ChatCmdError::NotConfirmed
+    );
+    let page = history(&a.chat, &peer.to_string(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(page.messages.len(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn history_clear_end_to_end() {
+    let (a, b) = connected().await;
+    let log_a = ChatLog::record(&a.messaging);
+    let (a_id, b_id) = (a.id.to_string(), b.id.to_string());
+    let sent = send(&a.chat, &b_id, "needle from alice".into())
+        .await
+        .unwrap();
+    log_a.wait_status(&sent.id, "delivered").await;
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while history(&b.chat, &a_id, None, None)
+        .await
+        .unwrap()
+        .messages
+        .is_empty()
+    {
+        assert!(tokio::time::Instant::now() < deadline, "never received");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    clear(&a.chat, &b_id, true).await.unwrap();
+    assert!(history(&a.chat, &b_id, None, None)
+        .await
+        .unwrap()
+        .messages
+        .is_empty());
+    assert!(search(&a.chat, "needle".into(), Some(b_id), None)
+        .await
+        .unwrap()
+        .is_empty());
+    let theirs = history(&b.chat, &a_id, None, None).await.unwrap();
+    assert_eq!(theirs.messages.len(), 1);
+    assert_eq!(theirs.messages[0].body, "needle from alice");
+    let (_, store) = a.chat.store_ref().unwrap();
+    assert_eq!(store.freelist_count().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn history_clear_without_store_fails_closed() {
+    let peer = stranger().to_string();
+    assert_eq!(
+        clear(&ChatState::new(), &peer, true).await.unwrap_err(),
+        ChatCmdError::StoreUnavailable
+    );
+}
+
+#[tokio::test]
+async fn history_clear_rejects_bad_node_id() {
+    assert_eq!(
+        clear(&ChatState::new(), "nope", true).await.unwrap_err(),
+        ChatCmdError::InvalidNodeId
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn history_clear_fails_queued_messages() {
+    let (a, b) = connected().await;
+    let log_a = ChatLog::record(&a.messaging);
+    a.state.node().unwrap().disconnect(&b.id);
+    wait_no_channel(&a, &b).await;
+    let sent = send(&a.chat, &b.id.to_string(), "queued".into())
+        .await
+        .unwrap();
+    assert_eq!(sent.status, "pending");
+
+    clear(&a.chat, &b.id.to_string(), true).await.unwrap();
+    log_a.wait_status(&sent.id, "failed").await;
+    connect_pair(&a, &b).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(history(&b.chat, &a.id.to_string(), None, None)
+        .await
+        .unwrap()
+        .messages
+        .is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn history_clear_on_removed_contact_works() {
+    let a = started_with_chat("Alice").await;
+    let peer = stranger();
+    seed(&a, &peer, 5, |i| i);
+    assert!(!a.contacts.book().unwrap().is_known(&peer).unwrap());
+    clear(&a.chat, &peer.to_string(), true).await.unwrap();
+    assert!(history(&a.chat, &peer.to_string(), None, None)
+        .await
+        .unwrap()
+        .messages
+        .is_empty());
 }

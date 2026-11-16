@@ -1,7 +1,5 @@
 use super::*;
-use crate::contacts::contract::{contact, node};
-use crate::contacts::testing::{FailingContactStore, MemoryContactStore};
-use crate::contacts::FileContactStore;
+use crate::contacts::contract::node;
 
 type Peers<'a> = &'a [(u8, Option<&'a str>, i64)];
 
@@ -38,26 +36,21 @@ impl Legacy {
         }
     }
 
-    fn path(&self) -> std::path::PathBuf {
-        self.dir.path().join(LEGACY_FILE_NAME)
+    fn read(&self) -> Vec<(AccountId, Contact)> {
+        read_legacy_known_peers(self.dir.path()).unwrap().unwrap()
     }
 }
 
 #[test]
-fn migrates_entries_as_unverified_contacts() {
+fn entries_become_unverified_contacts() {
     let l = Legacy::new(&[(1, Some("Bob"), 1234)]);
-    let store = MemoryContactStore::new();
-    let report = migrate_legacy_known_peers(l.dir.path(), &store).unwrap();
-    assert_eq!(
-        report,
-        MigrationReport {
-            migrated: 1,
-            already_present: 0
-        }
-    );
-    let c = store.get(&l.account, &node(1)).unwrap().unwrap();
+    let parsed = l.read();
+    assert_eq!(parsed.len(), 1);
+    let (account, c) = &parsed[0];
+    assert_eq!(*account, l.account);
+    assert_eq!(c.node_id, node(1));
     assert_eq!(c.nickname.as_str(), "Bob");
-    assert_eq!(c.self_name.unwrap().as_str(), "Bob");
+    assert_eq!(c.self_name.as_ref().unwrap().as_str(), "Bob");
     assert_eq!(c.added_at_ms, 1234);
     assert_eq!(c.trust, TrustState::Unverified);
     assert_eq!(c.last_seen_ms, None);
@@ -65,80 +58,37 @@ fn migrates_entries_as_unverified_contacts() {
 
 #[test]
 fn nameless_entry_gets_peer_short_id_nickname() {
-    let l = Legacy::new(&[(1, None, 5)]);
-    let store = MemoryContactStore::new();
-    migrate_legacy_known_peers(l.dir.path(), &store).unwrap();
-    let c = store.get(&l.account, &node(1)).unwrap().unwrap();
+    let c = Legacy::new(&[(1, None, 5)]).read().remove(0).1;
     assert_eq!(c.nickname.as_str(), format!("Peer {}", node(1).fmt_short()));
     assert_eq!(c.self_name, None);
 }
 
 #[test]
 fn invisible_legacy_name_counts_as_no_name() {
-    let l = Legacy::new(&[(1, Some("Bob\u{200D}"), 5)]);
-    let store = MemoryContactStore::new();
-    let report = migrate_legacy_known_peers(l.dir.path(), &store).unwrap();
-    assert_eq!(report.migrated, 1);
-    let c = store.get(&l.account, &node(1)).unwrap().unwrap();
+    let c = Legacy::new(&[(1, Some("Bob\u{200D}"), 5)])
+        .read()
+        .remove(0)
+        .1;
     assert_eq!(c.nickname.as_str(), format!("Peer {}", node(1).fmt_short()));
     assert_eq!(c.self_name, None);
-    assert!(!l.path().exists());
 }
 
 #[test]
-fn migrates_every_account_separately() {
+fn every_account_is_read_separately() {
     let (a, b) = (AccountId::new(), AccountId::new());
     let l = Legacy::multi(&[(a, &[(1, Some("Bob"), 1)]), (b, &[(2, None, 2)])]);
-    let store = MemoryContactStore::new();
-    let report = migrate_legacy_known_peers(l.dir.path(), &store).unwrap();
-    assert_eq!(report.migrated, 2);
-    assert!(store.get(&a, &node(1)).unwrap().is_some());
-    assert!(store.get(&a, &node(2)).unwrap().is_none());
-    assert!(store.get(&b, &node(2)).unwrap().is_some());
-    assert!(store.get(&b, &node(1)).unwrap().is_none());
+    let parsed = l.read();
+    assert_eq!(parsed.len(), 2);
+    assert!(parsed
+        .iter()
+        .any(|(acc, c)| *acc == a && c.node_id == node(1)));
+    assert!(parsed
+        .iter()
+        .any(|(acc, c)| *acc == b && c.node_id == node(2)));
 }
 
 #[test]
-fn is_idempotent_and_never_overwrites_contacts() {
-    let l = Legacy::new(&[(1, Some("Bob"), 1), (2, None, 2)]);
-    let store = MemoryContactStore::new();
-    let mut mine = contact(1, "Mine");
-    mine.trust = TrustState::Verified;
-    store.insert(&l.account, mine.clone()).unwrap();
-    let report = migrate_legacy_known_peers(l.dir.path(), &store).unwrap();
-    assert_eq!(
-        report,
-        MigrationReport {
-            migrated: 1,
-            already_present: 1
-        }
-    );
-    assert_eq!(store.get(&l.account, &node(1)).unwrap().unwrap(), mine);
-    assert!(!l.path().exists());
-    assert_eq!(
-        migrate_legacy_known_peers(l.dir.path(), &store).unwrap(),
-        MigrationReport::default()
-    );
-}
-
-#[test]
-fn single_atomic_write_and_legacy_deleted_only_after_success() {
-    let l = Legacy::new(&[(1, Some("Bob"), 1), (2, None, 2), (3, None, 3)]);
-    let store = MemoryContactStore::new();
-    migrate_legacy_known_peers(l.dir.path(), &store).unwrap();
-    assert_eq!(store.writes(), 1);
-    assert!(!l.path().exists());
-
-    let l = Legacy::new(&[(1, Some("Bob"), 1)]);
-    assert!(matches!(
-        migrate_legacy_known_peers(l.dir.path(), &FailingContactStore),
-        Err(MigrationError::Store(_))
-    ));
-    assert!(l.path().exists());
-}
-
-#[test]
-fn corrupt_legacy_file_is_left_untouched_and_nothing_migrated() {
+fn corrupt_legacy_file_is_a_typed_error_and_untouched() {
     let good = node(1).to_string();
     let acct = AccountId::new().as_uuid().hyphenated().to_string();
     let cases = [
@@ -154,28 +104,51 @@ fn corrupt_legacy_file_is_left_untouched_and_nothing_migrated() {
         format!(
             r#"{{"version":1,"accounts":{{"{acct}":{{"{good}":{{"name":"a\nb","added_at_ms":1}}}}}}}}"#
         ),
+        format!(
+            r#"{{"version":1,"accounts":{{"{acct}":{{"{good}":{{"name":null,"added_at_ms":-1}}}}}}}}"#
+        ),
     ];
     for body in cases {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(LEGACY_FILE_NAME);
         fs::write(&path, &body).unwrap();
-        let store = FileContactStore::new(dir.path());
-        assert!(matches!(
-            migrate_legacy_known_peers(dir.path(), &store),
-            Err(MigrationError::LegacyCorrupt)
-        ));
+        assert_eq!(
+            read_legacy_known_peers(dir.path()),
+            Err(LegacyError::Corrupt)
+        );
         assert_eq!(fs::read_to_string(&path).unwrap(), body);
-        assert!(!dir.path().join("contacts.json").exists());
     }
 }
 
 #[test]
-fn missing_legacy_file_is_noop() {
+fn oversized_file_is_corrupt() {
     let dir = tempfile::tempdir().unwrap();
-    let store = FileContactStore::new(dir.path());
+    fs::write(
+        dir.path().join(LEGACY_FILE_NAME),
+        vec![b' '; MAX_LEGACY_BYTES as usize + 1],
+    )
+    .unwrap();
     assert_eq!(
-        migrate_legacy_known_peers(dir.path(), &store).unwrap(),
-        MigrationReport::default()
+        read_legacy_known_peers(dir.path()),
+        Err(LegacyError::Corrupt)
     );
-    assert!(!dir.path().join("contacts.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_file_is_not_regular() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("elsewhere");
+    fs::write(&target, r#"{"version":1,"accounts":{}}"#).unwrap();
+    std::os::unix::fs::symlink(&target, dir.path().join(LEGACY_FILE_NAME)).unwrap();
+    assert_eq!(
+        read_legacy_known_peers(dir.path()),
+        Err(LegacyError::NotRegularFile)
+    );
+}
+
+#[test]
+fn missing_legacy_file_is_none() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(read_legacy_known_peers(dir.path()), Ok(None));
 }

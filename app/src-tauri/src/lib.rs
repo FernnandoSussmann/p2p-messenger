@@ -13,16 +13,18 @@ mod test_util;
 use std::sync::Arc;
 use std::time::Duration;
 
-use messenger_core::contacts::{migrate_legacy_known_peers, FileContactStore};
+use messenger_core::contacts::SqlCipherContactStore;
 use messenger_core::discovery::LiveTicketProvider;
-use messenger_core::identity::{FileSettingsStore, IdentityService, IdentityStatus, OsKeychain};
+use messenger_core::identity::{
+    IdentityService, IdentityStatus, OsKeychain, SqlCipherSettingsStore,
+};
 use messenger_core::logging::{self, LogConfig};
 use messenger_core::storage::Storage;
 use tauri::{Manager, RunEvent};
 
 const APP_TITLE: &str = "p2p-messenger";
 
-use chat_cmd::{chat_history, chat_resend, chat_send, history_search, ChatState};
+use chat_cmd::{chat_history, chat_resend, chat_send, history_clear, history_search, ChatState};
 use contacts_cmd::{
     contacts_add, contacts_is_known, contacts_list, contacts_remove, contacts_rename,
     contacts_set_verified, ContactsState,
@@ -66,26 +68,17 @@ pub fn run() {
                 std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700))
                     .map_err(|e| format!("cannot restrict app data directory permissions: {e}"))?;
             }
-            let contacts_store = Arc::new(FileContactStore::new(data_dir.clone()));
-            match migrate_legacy_known_peers(&data_dir, contacts_store.as_ref()) {
-                Ok(r) if r.migrated > 0 => {
-                    tracing::info!(count = r.migrated, "legacy known peers migrated");
-                }
-                Ok(_) => {}
-                Err(_) => {
-                    tracing::warn!("legacy known peers not migrated; those peers will be prompted again")
-                }
-            }
+            let keychain = Arc::new(OsKeychain::native_for(layout.profile.as_ref())?);
+            let storage = Arc::new(Storage::new(data_dir.clone(), keychain.clone()));
+            let contacts_store = Arc::new(SqlCipherContactStore::new(storage.clone()));
             let chat_state = Arc::new(ChatState::new());
             app.manage(Arc::new(ContactsState::new(
                 contacts_store,
                 chat_state.clone(),
             )));
             app.manage(chat_state.clone());
-            let settings = Arc::new(FileSettingsStore::new(data_dir.clone()));
+            let settings = Arc::new(SqlCipherSettingsStore::new(storage.clone()));
             let tickets = LiveTicketProvider::new();
-            let keychain = Arc::new(OsKeychain::native_for(layout.profile.as_ref())?);
-            let storage = Arc::new(Storage::new(data_dir.clone(), keychain.clone()));
             let service: AppIdentity = IdentityService::new(
                 keychain,
                 Arc::clone(&settings),
@@ -136,6 +129,7 @@ pub fn run() {
             chat_resend,
             chat_history,
             history_search,
+            history_clear,
             storage_status,
             storage_retry
         ])
