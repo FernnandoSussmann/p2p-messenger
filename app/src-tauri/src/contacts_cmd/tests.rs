@@ -340,18 +340,22 @@ async fn remove_with_erase_deletes_stored_messages() {
     use messenger_core::identity::testing::FakeKeychain;
     use messenger_core::identity::{IdentityService, MemorySettingsStore, NodeIdTicketProvider};
     use messenger_core::messaging::{MessageStatus, MessageStore};
+    use messenger_core::storage::Storage;
 
     for (flag, kept) in [(Some(true), 0), (Some(false), 2)] {
         let dir = tempfile::tempdir().unwrap();
+        let keychain = Arc::new(FakeKeychain::new());
         let identity = IdentityService::new(
-            FakeKeychain::new(),
+            keychain.clone(),
             MemorySettingsStore::new(),
             NodeIdTicketProvider,
             dir.path(),
         );
-        identity.provision().unwrap();
+        let account = identity.provision().unwrap().account_id;
+        let storage = Storage::new(dir.path(), keychain);
+        storage.database_creating(&account).unwrap();
         let chat = Arc::new(ChatState::new());
-        chat.open_store(&identity).unwrap();
+        chat.open_store(&storage, &account).unwrap();
         let (account, store) = chat.store_ref().unwrap();
         let c = ContactsState::new(Arc::new(MemoryContactStore::new()), chat.clone());
         c.bind(account, node(1));

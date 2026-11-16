@@ -6,6 +6,7 @@ mod contacts_cmd;
 mod identity_cmd;
 mod net_cmd;
 mod profile;
+mod storage_cmd;
 #[cfg(test)]
 mod test_util;
 
@@ -15,6 +16,8 @@ use std::time::Duration;
 use messenger_core::contacts::{migrate_legacy_known_peers, FileContactStore};
 use messenger_core::discovery::LiveTicketProvider;
 use messenger_core::identity::{FileSettingsStore, IdentityService, IdentityStatus, OsKeychain};
+use messenger_core::logging::{self, LogConfig};
+use messenger_core::storage::Storage;
 use tauri::{Manager, RunEvent};
 
 const APP_TITLE: &str = "p2p-messenger";
@@ -32,6 +35,7 @@ use net_cmd::{
     net_presence_get, net_presence_set, net_respond_incoming, relay_override_from_env, NetBoot,
     NetState,
 };
+use storage_cmd::{storage_retry, storage_status};
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -45,7 +49,15 @@ pub fn run() {
             )
             .map_err(|e| format!("invalid profile: {e}"))?;
             let relay = relay_override_from_env(std::env::var("MESSENGER_RELAY_URL").ok())?;
-            let layout = profile::layout(&app.path().app_data_dir()?, profile);
+            let layout =
+                profile::layout(&app.path().app_data_dir()?, &app.path().app_log_dir()?, profile);
+            let level = logging::level_from_env(std::env::var("MESSENGER_LOG").ok().as_deref())?;
+            if logging::init(&LogConfig::new(layout.log_dir, level)).is_err() {
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stderr(),
+                    b"p2p-messenger: diagnostic log file unavailable; continuing without file logging\n",
+                );
+            }
             let data_dir = layout.data_dir;
             std::fs::create_dir_all(&data_dir)?;
             #[cfg(unix)]
@@ -55,28 +67,42 @@ pub fn run() {
                     .map_err(|e| format!("cannot restrict app data directory permissions: {e}"))?;
             }
             let contacts_store = Arc::new(FileContactStore::new(data_dir.clone()));
-            // The app crate has no tracing dependency; counts only, never names.
             match migrate_legacy_known_peers(&data_dir, contacts_store.as_ref()) {
                 Ok(r) if r.migrated > 0 => {
-                    eprintln!("migrated {} known peers to contacts", r.migrated);
+                    tracing::info!(count = r.migrated, "legacy known peers migrated");
                 }
                 Ok(_) => {}
                 Err(_) => {
-                    eprintln!("legacy known peers not migrated; those peers will be prompted again")
+                    tracing::warn!("legacy known peers not migrated; those peers will be prompted again")
                 }
             }
-            let chat = Arc::new(ChatState::new());
-            app.manage(Arc::new(ContactsState::new(contacts_store, chat.clone())));
-            app.manage(chat);
+            let chat_state = Arc::new(ChatState::new());
+            app.manage(Arc::new(ContactsState::new(
+                contacts_store,
+                chat_state.clone(),
+            )));
+            app.manage(chat_state.clone());
             let settings = Arc::new(FileSettingsStore::new(data_dir.clone()));
             let tickets = LiveTicketProvider::new();
+            let keychain = Arc::new(OsKeychain::native_for(layout.profile.as_ref())?);
+            let storage = Arc::new(Storage::new(data_dir.clone(), keychain.clone()));
             let service: AppIdentity = IdentityService::new(
-                OsKeychain::native_for(layout.profile.as_ref())?,
+                keychain,
                 Arc::clone(&settings),
                 tickets.clone(),
                 data_dir.clone(),
             );
-            let present = matches!(service.status(), IdentityStatus::Present { .. });
+            // Open eagerly when an identity exists, so the first `storage_status` is
+            // already decided; a failure is latched and shown by the UI, never
+            // auto-retried.
+            let present = match service.status() {
+                IdentityStatus::Present { account_id, .. } => {
+                    let _ = storage_cmd::open_for(&storage, &chat_state, &account_id);
+                    true
+                }
+                _ => false,
+            };
+            app.manage(storage);
             app.manage(service);
             if let Some(window) = app.get_webview_window("main") {
                 window.set_title(&profile::window_title(APP_TITLE, layout.profile.as_ref()))?;
@@ -109,7 +135,9 @@ pub fn run() {
             chat_send,
             chat_resend,
             chat_history,
-            history_search
+            history_search,
+            storage_status,
+            storage_retry
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

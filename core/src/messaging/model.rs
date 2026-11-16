@@ -141,9 +141,6 @@ pub enum Insert {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageStoreError {
     Unavailable,
-    WrongKeyOrCorrupt,
-    NewerSchema,
-    NotEncrypted,
     AlreadyExists,
     InvalidBody,
     InvalidQuery,
@@ -153,9 +150,6 @@ impl fmt::Display for MessageStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Unavailable => "message store unavailable",
-            Self::WrongKeyOrCorrupt => "message store key is wrong or the file is corrupt",
-            Self::NewerSchema => "message store was written by a newer version",
-            Self::NotEncrypted => "message store encryption is not available",
             Self::AlreadyExists => "message already exists",
             Self::InvalidBody => "invalid message body",
             Self::InvalidQuery => "invalid query",

@@ -12,11 +12,12 @@ use crate::contacts::testing::{BookCell, MemoryContactStore};
 use crate::contacts::{accept_incoming, HistoryEraser, NoMessageStore};
 use crate::discovery::testing::{next_event, restart, spawn_test_node_with, TestNode, TestOptions};
 use crate::discovery::{Channel, ConnectionState, NetEvent, Node};
-use crate::identity::NodeId;
+use crate::identity::{read_marker, NodeId};
 use crate::messaging::testing::MemoryMessageStore;
 use crate::messaging::{
-    decode_ack, open_message_store, MessageStore, Messaging, MessagingConfig, MessagingDeps,
+    decode_ack, MessageStore, Messaging, MessagingConfig, MessagingDeps, SqlCipherMessageStore,
 };
+use crate::storage::Storage;
 
 const WAIT: Duration = Duration::from_secs(10);
 const REPLY_WAIT: Duration = Duration::from_millis(1500);
@@ -62,7 +63,12 @@ async fn assemble(
 }
 
 async fn sqlcipher_store(node: &TestNode) -> Arc<dyn MessageStore> {
-    Arc::new(open_message_store(&node.identity).expect("open store").1)
+    let account = read_marker(node.dir.path())
+        .expect("marker")
+        .expect("provisioned");
+    let storage = Storage::new(node.dir.path(), node.keychain.clone());
+    let db = storage.database_creating(&account).expect("open store");
+    Arc::new(SqlCipherMessageStore::new(db))
 }
 
 /// A provisioned node whose contacts live in memory. `Memory` shares one

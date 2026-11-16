@@ -2,8 +2,11 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use messenger_core::identity::testing::FakeKeychain;
-use messenger_core::identity::{KeychainStore, MemorySettingsStore, NodeIdTicketProvider};
-use messenger_core::messaging::{MessageStatus, DB_FILE, DEFAULT_PAGE, MAX_BODY_BYTES, MAX_PAGE};
+use messenger_core::identity::{
+    IdentityService, KeychainStore, MemorySettingsStore, NodeIdTicketProvider,
+};
+use messenger_core::messaging::{MessageStatus, DEFAULT_PAGE, MAX_BODY_BYTES, MAX_PAGE};
+use messenger_core::storage::{Storage, StorageError, DB_FILE};
 use protocol::{new_message_id, ChatMessage};
 use serde_json::json;
 
@@ -12,17 +15,19 @@ use crate::test_util::{
     assert_forms_absent, connect_pair, started_with_chat, ChatLog, StartedChat, WAIT,
 };
 
-fn provisioned(
-    dir: &tempfile::TempDir,
-) -> IdentityService<FakeKeychain, MemorySettingsStore, NodeIdTicketProvider> {
+/// A provisioned account with its DB created, as the first-run flow leaves it.
+fn provisioned(dir: &tempfile::TempDir) -> (Storage, AccountId) {
+    let keychain = Arc::new(FakeKeychain::new());
     let identity = IdentityService::new(
-        FakeKeychain::new(),
+        keychain.clone(),
         MemorySettingsStore::new(),
         NodeIdTicketProvider,
         dir.path(),
     );
-    identity.provision().unwrap();
-    identity
+    let account = identity.provision().unwrap().account_id;
+    let storage = Storage::new(dir.path(), keychain);
+    storage.database_creating(&account).unwrap();
+    (storage, account)
 }
 
 #[test]
@@ -36,14 +41,14 @@ fn erase_without_store_fails_closed() {
 #[test]
 fn open_store_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
-    let identity = provisioned(&dir);
+    let (storage, account) = provisioned(&dir);
     let chat = ChatState::new();
     assert!(chat.store_ref().is_err());
-    chat.open_store(&identity).unwrap();
-    let (account, first) = chat.store_ref().unwrap();
-    chat.open_store(&identity).unwrap();
+    chat.open_store(&storage, &account).unwrap();
+    let (stored, first) = chat.store_ref().unwrap();
+    chat.open_store(&storage, &account).unwrap();
     let (again, second) = chat.store_ref().unwrap();
-    assert_eq!(account, again);
+    assert_eq!((account, account), (stored, again));
     assert!(Arc::ptr_eq(&first, &second));
     assert!(dir.path().join(DB_FILE).exists());
 }
@@ -51,16 +56,11 @@ fn open_store_is_idempotent() {
 #[test]
 fn open_store_fails_without_identity() {
     let dir = tempfile::tempdir().unwrap();
-    let identity = IdentityService::new(
-        FakeKeychain::new(),
-        MemorySettingsStore::new(),
-        NodeIdTicketProvider,
-        dir.path(),
-    );
+    let storage = Storage::new(dir.path(), Arc::new(FakeKeychain::new()));
     let chat = ChatState::new();
     assert_eq!(
-        chat.open_store(&identity),
-        Err(MessageStoreError::Unavailable)
+        chat.open_store(&storage, &AccountId::new()),
+        Err(StorageError::KeyMissing)
     );
     assert!(chat.store_ref().is_err());
     assert!(!dir.path().join(DB_FILE).exists());
@@ -168,9 +168,9 @@ async fn readiness_codes() {
     );
 
     let dir = tempfile::tempdir().unwrap();
-    let identity = provisioned(&dir);
+    let (storage, account) = provisioned(&dir);
     let chat = ChatState::new();
-    chat.open_store(&identity).unwrap();
+    chat.open_store(&storage, &account).unwrap();
     assert_eq!(
         send(&chat, &peer, "hi".into()).await.unwrap_err(),
         ChatCmdError::NotReady
