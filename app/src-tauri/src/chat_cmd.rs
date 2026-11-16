@@ -10,15 +10,15 @@ use std::sync::{Arc, OnceLock};
 
 use messenger_core::contacts::{HistoryEraseError, HistoryEraser};
 use messenger_core::discovery::{KnownPeers, Node};
-use messenger_core::identity::{
-    AccountId, IdentityService, KeychainStore, NodeId, SettingsStore, TicketProvider,
-};
+use messenger_core::identity::{AccountId, NodeId};
+use messenger_core::logging;
 use messenger_core::messaging::{
-    chat_event_json, history_page, open_message_store, parse_message_id, ChatEvent, HistoryCursor,
-    HistoryPageDto, MessageDto, MessageStatusDto, MessageStore, MessageStoreError, Messaging,
-    MessagingConfig, MessagingDeps, SendError, SqlCipherMessageStore, CHAT_RESYNC,
-    DEFAULT_SEARCH_RESULTS, MAX_SEARCH_RESULTS,
+    chat_event_json, history_page, parse_message_id, ChatEvent, HistoryCursor, HistoryPageDto,
+    MessageDto, MessageStatusDto, MessageStore, MessageStoreError, Messaging, MessagingConfig,
+    MessagingDeps, SendError, SqlCipherMessageStore, CHAT_RESYNC, DEFAULT_SEARCH_RESULTS,
+    MAX_SEARCH_RESULTS,
 };
+use messenger_core::storage::{Storage, StorageError};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
@@ -44,15 +44,12 @@ impl ChatState {
     }
 
     /// Idempotent: once a store is open, later calls do nothing.
-    pub fn open_store<K: KeychainStore, S: SettingsStore, T: TicketProvider>(
-        &self,
-        identity: &IdentityService<K, S, T>,
-    ) -> Result<(), MessageStoreError> {
+    pub fn open_store(&self, storage: &Storage, account: &AccountId) -> Result<(), StorageError> {
         if self.store.get().is_some() {
             return Ok(());
         }
-        let (account, store) = open_message_store(identity)?;
-        let _ = self.store.set((account, Arc::new(store)));
+        let store = SqlCipherMessageStore::new(storage.database(account)?);
+        let _ = self.store.set((*account, Arc::new(store)));
         Ok(())
     }
 
@@ -90,6 +87,20 @@ impl ChatState {
             .get()
             .cloned()
             .ok_or(ChatCmdError::StoreUnavailable)
+    }
+
+    /// Fails queued outgoing messages for `peer` (so nothing is sent after the
+    /// user cleared the conversation), then erases through the shared eraser.
+    /// The erase rewrites the database file, so it runs off the async runtime.
+    pub async fn clear_history(&self, peer: NodeId) -> Result<(), ChatCmdError> {
+        let (account, store) = self.store_ref()?;
+        if let Ok(messaging) = self.messaging() {
+            messaging.forget_peer(peer).await;
+        }
+        tauri::async_runtime::spawn_blocking(move || store.erase_peer_history(&account, &peer))
+            .await
+            .map_err(|_| ChatCmdError::Internal)?
+            .map_err(|_| ChatCmdError::HistoryClearFailed)
     }
 
     pub fn shutdown(&self) {
@@ -136,6 +147,8 @@ pub enum ChatCmdError {
     NotResendable,
     InvalidQuery,
     ContactsUnavailable,
+    NotConfirmed,
+    HistoryClearFailed,
     Internal,
 }
 
@@ -232,6 +245,18 @@ pub async fn search(
     Ok(rows.iter().map(MessageDto::from).collect())
 }
 
+/// `confirm` only guards against accidental or buggy callers; the real
+/// confirmation is the dialog in the webview.
+pub async fn clear(chat: &ChatState, node_id: &str, confirm: bool) -> Result<(), ChatCmdError> {
+    if !confirm {
+        return Err(ChatCmdError::NotConfirmed);
+    }
+    let peer = node_id_of(node_id)?;
+    chat.clear_history(peer).await?;
+    tracing::info!(peer = %logging::fields::peer(&peer), "history cleared");
+    Ok(())
+}
+
 /// Maps a chat event result to its external name and payload and hands it to
 /// `emit`. A lagged stream asks the UI to reload. Returns false to stop.
 pub fn forward_chat(ev: Result<ChatEvent, RecvError>, emit: impl Fn(&str, Value)) -> bool {
@@ -285,6 +310,15 @@ pub async fn history_search(
     limit: Option<u32>,
 ) -> Result<Vec<MessageDto>, ChatCmdError> {
     search(&chat, query, node_id, limit).await
+}
+
+#[tauri::command]
+pub async fn history_clear(
+    chat: State<'_, Arc<ChatState>>,
+    node_id: String,
+    confirm: bool,
+) -> Result<(), ChatCmdError> {
+    clear(&chat, &node_id, confirm).await
 }
 
 #[cfg(test)]

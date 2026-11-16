@@ -13,6 +13,7 @@ mod profile;
 mod secret;
 mod service;
 mod settings;
+mod settings_sql;
 mod ticket;
 
 pub(crate) use display_name::{is_bidi_control, is_disallowed_control, is_invisible_break};
@@ -25,8 +26,11 @@ pub use service::{
     IdentityService, IdentityStatus, LoadError, LoadedIdentity, MyInfo, MyInfoError,
     ProvisionError, Provisioned, SetNameError, StatusError,
 };
-pub use settings::{
-    validate_relay_url, FileSettingsStore, MemorySettingsStore, SettingsError, SettingsStore,
+pub(crate) use settings::{read_legacy_settings, LegacySettings};
+pub use settings::{validate_relay_url, MemorySettingsStore, SettingsError, SettingsStore};
+pub use settings_sql::SqlCipherSettingsStore;
+pub(crate) use settings_sql::{
+    insert_settings_if_absent_tx, MIGRATION_SETTINGS, SQL_SETTINGS_COUNT_OTHERS,
 };
 pub use ticket::{
     ticket_to_qr_svg, NodeId, NodeIdTicketProvider, ParsedTicket, Ticket, TicketError,

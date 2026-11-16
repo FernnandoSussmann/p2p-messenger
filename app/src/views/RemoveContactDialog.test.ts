@@ -10,6 +10,7 @@ vi.mock("../lib/contactsStore", () => ({ refreshContacts: vi.fn(async () => {}) 
 
 import RemoveContactDialog from "./RemoveContactDialog.svelte";
 import { contactsRemove } from "../contacts";
+import { HISTORY_DELETE_GUARANTEE } from "../lib/historyCopy";
 
 const contact = { node_id: "id", nickname: "Bob", self_name: null, verified: false, added_at_ms: 0, last_seen_ms: null };
 const onDone = vi.fn();
@@ -30,6 +31,7 @@ describe("RemoveContactDialog", () => {
     vi.mocked(contactsRemove).mockResolvedValue({ node_id: "id", history_erased: false });
     show();
     expect(screen.getByRole("dialog").textContent).toContain("will be kept");
+    expect(screen.getByRole("dialog").textContent).not.toContain(HISTORY_DELETE_GUARANTEE);
     await fireEvent.click(screen.getByRole("button", { name: "Remove contact" }));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith({ node_id: "id", history_erased: false }));
     expect(contactsRemove).toHaveBeenCalledWith("id", false);
@@ -42,6 +44,7 @@ describe("RemoveContactDialog", () => {
     const text = screen.getByRole("dialog").textContent!;
     expect(text).toContain("permanently deleted");
     expect(text).toContain("cannot be undone");
+    expect(text).toContain(HISTORY_DELETE_GUARANTEE);
     await fireEvent.click(screen.getByRole("button", { name: "Remove contact and delete history" }));
     await waitFor(() => expect(contactsRemove).toHaveBeenCalledWith("id", true));
   });

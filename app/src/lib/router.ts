@@ -8,6 +8,7 @@ import Network from "../views/Network.svelte";
 export type AppView =
   | { kind: "loading" }
   | { kind: "blocked"; message: string }
+  | { kind: "storage"; message: string }
   | { kind: "wizard" }
   | { kind: "main" };
 

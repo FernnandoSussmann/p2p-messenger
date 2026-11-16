@@ -14,7 +14,7 @@
 //! are handed to the keychain and dropped.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::keygen::{generate_db_key, generate_identity_key, node_id_from_secret_bytes};
@@ -295,6 +295,7 @@ where
             // Best effort: a failed delete must not mask the original error.
             let _ = self.keychain.delete_identity_key(&account_id);
             let _ = self.keychain.delete_db_key(&account_id);
+            let _ = self.settings.discard_new_account(&account_id);
             return Err(e);
         }
         Ok(Provisioned {
@@ -375,24 +376,6 @@ where
             .load_db_key(&account_id)
             .map_err(|e| LoadError::Unavailable(e.into()))?;
         Ok((account_id, identity_key))
-    }
-
-    /// Loads the SQLCipher key for the message store. Crate-private: the key is
-    /// used and dropped inside `core` and never reaches the app.
-    pub(crate) fn load_db_key(&self) -> Result<(AccountId, DbKey), LoadError> {
-        let account_id = read_marker(&self.data_dir)
-            .map_err(|e| LoadError::Unavailable(e.into()))?
-            .ok_or(LoadError::NotProvisioned)?;
-        let db_key = self
-            .keychain
-            .load_db_key(&account_id)
-            .map_err(|e| LoadError::Unavailable(e.into()))?;
-        Ok((account_id, db_key))
-    }
-
-    /// The app-data directory holding the marker (and the encrypted DB).
-    pub(crate) fn data_dir(&self) -> &Path {
-        &self.data_dir
     }
 
     /// `Ok(None)` only when the marker is absent; every other failure is an error.
@@ -701,32 +684,6 @@ mod tests {
             let stored = svc.keychain.load_identity_key(&p.account_id).unwrap();
             assert_eq!(SecretKey::from_bytes(stored.as_bytes()).public(), p.node_id);
         }
-    }
-
-    #[test]
-    fn load_db_key_requires_provisioning() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(matches!(
-            service(&dir).load_db_key(),
-            Err(LoadError::NotProvisioned)
-        ));
-        let (svc, p) = provisioned(&dir);
-        svc.keychain.delete_db_key(&p.account_id).unwrap();
-        assert!(matches!(
-            svc.load_db_key(),
-            Err(LoadError::Unavailable(StatusError::SecretMissing))
-        ));
-    }
-
-    #[test]
-    fn load_db_key_returns_the_stored_key_for_the_marker_account() {
-        let dir = tempfile::tempdir().unwrap();
-        let (svc, p) = provisioned(&dir);
-        let (account, key) = svc.load_db_key().unwrap();
-        assert_eq!(account, p.account_id);
-        let stored = svc.keychain.load_db_key(&p.account_id).unwrap();
-        assert_eq!(key.as_bytes(), stored.as_bytes());
-        assert_eq!(svc.data_dir(), dir.path());
     }
 
     const IDENTITY_CANARY: [u8; 32] = [

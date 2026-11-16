@@ -13,11 +13,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use iroh::endpoint::{presets, Connection, ConnectionError, Incoming, VarInt};
-use iroh::{Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey, Watcher};
+use iroh::endpoint::{
+    presets, Connection, ConnectionError, Incoming, PathEvent, PathEventStream, VarInt,
+};
+use iroh::{Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey, TransportAddr, Watcher};
 use protocol::{ALPN, MAX_HELLO_BYTES};
 use tokio::sync::{broadcast, oneshot};
 use tokio::time::{sleep, timeout};
+use tokio_stream::StreamExt;
 
 use super::channel::{Channel, ChannelHandler};
 use super::events::{ConnectionState, Direction, FailureReason, IncomingRequest, NetEvent};
@@ -30,6 +33,7 @@ use crate::identity::{
     AccountId, DisplayName, IdentityService, KeychainStore, LoadError, NodeId, SettingsError,
     SettingsStore, Ticket, TicketError, TicketProvider,
 };
+use crate::logging::fields;
 
 /// The peer declined the request.
 pub const CLOSE_DECLINED: u32 = 1;
@@ -309,6 +313,7 @@ impl Inner {
     }
 
     fn emit_state(&self, node_id: NodeId, direction: Direction, state: ConnectionState) {
+        tracing::info!(peer = %fields::peer(&node_id), direction = ?direction, state = ?state, "connection state");
         self.emit(NetEvent::ConnectionState {
             node_id,
             direction,
@@ -318,6 +323,7 @@ impl Inner {
     }
 
     fn emit_connected(&self, node_id: NodeId, direction: Direction, name: Option<DisplayName>) {
+        tracing::info!(peer = %fields::peer(&node_id), direction = ?direction, state = ?ConnectionState::Connected, "connection state");
         self.emit(NetEvent::ConnectionState {
             node_id,
             direction,
@@ -388,6 +394,7 @@ impl Node {
             LanMode::Memory(bus) => Arc::new(bus.join(endpoint.clone())),
         };
         let lan_events = lan.events();
+        let bound = endpoint.bound_sockets();
         // A store that cannot be read must not make us visible.
         let presence = match deps.settings.get_presence(&account) {
             Ok(saved) => saved.unwrap_or(true),
@@ -426,11 +433,19 @@ impl Node {
             closing: AtomicBool::new(false),
             runtime: tokio::runtime::Handle::current(),
         });
+        let endpoint_for_relay = endpoint.clone();
         inner.tickets.attach(endpoint);
         inner.runtime.spawn(accept_loop(inner.clone()));
         inner.runtime.spawn(watch_ticket(inner.clone()));
         inner.runtime.spawn(lan_loop(inner.clone(), lan_events));
-        tracing::debug!(node = %node_id.fmt_short(), "node started");
+        inner.runtime.spawn(watch_home_relay(endpoint_for_relay));
+        tracing::info!(
+            node = %fields::peer(&node_id),
+            relay = ?config.relay,
+            lan = lan_label(&config.lan),
+            bound = ?bound,
+            "node started"
+        );
         Ok(Node { inner })
     }
 
@@ -625,6 +640,7 @@ impl Node {
             return Err(PresenceError::Lan(e));
         }
         *current = on;
+        tracing::info!(presence = if on { "on" } else { "off" }, "presence changed");
         Ok(())
     }
 
@@ -689,6 +705,7 @@ impl Drop for Node {
 
 impl Inner {
     async fn close(&self) {
+        tracing::info!(node = %fields::peer(&self.node_id), "node stopping");
         self.closing.store(true, Ordering::SeqCst);
         *self.handler() = None;
         self.tickets.detach();
@@ -791,12 +808,12 @@ async fn handle_incoming(inner: Arc<Inner>, incoming: Incoming, slot: HandshakeS
     })
     .await;
     let Ok(Some((send, bytes))) = first_frame else {
-        tracing::debug!(peer = %peer.fmt_short(), "no valid first frame");
+        tracing::debug!(peer = %fields::peer(&peer), "no valid first frame");
         close(&conn, CLOSE_PROTOCOL);
         return;
     };
     let Ok(name) = decode_hello(&bytes) else {
-        tracing::debug!(peer = %peer.fmt_short(), "first frame rejected");
+        tracing::debug!(peer = %fields::peer(&peer), "first frame rejected");
         close(&conn, CLOSE_PROTOCOL);
         return;
     };
@@ -946,6 +963,14 @@ fn authorize(
         close(&old.conn, CLOSE_REPLACED);
     }
     inner.emit_connected(peer, direction, name.clone());
+    let initial: Vec<(TransportAddr, bool)> = conn
+        .paths()
+        .iter()
+        .map(|p| (p.remote_addr().clone(), p.is_selected()))
+        .collect();
+    inner
+        .runtime
+        .spawn(log_paths(peer, initial, conn.path_events()));
     let handler = inner.handler().clone();
     if let Some(handler) = handler {
         handler.on_channel(Channel::new(peer, conn.clone(), inner));
@@ -959,7 +984,7 @@ fn authorize(
         })
         .await;
         if recorded.is_err() {
-            tracing::debug!(peer = %peer.fmt_short(), "could not record peer name");
+            tracing::debug!(peer = %fields::peer(&peer), "could not record peer name");
         }
     });
     inner.runtime.clone().spawn(async move {
@@ -990,6 +1015,12 @@ async fn dial(inner: Arc<Inner>, addr: EndpointAddr) {
 
 async fn run_dial(inner: &Arc<Inner>, addr: EndpointAddr) -> Result<(), FailureReason> {
     let peer = addr.id;
+    tracing::info!(
+        peer = %fields::peer(&peer),
+        direct_addrs = addr.ip_addrs().count(),
+        relay = ?addr.relay_urls().next(),
+        "dialing"
+    );
     let conn = match timeout(DIAL_TIMEOUT, inner.endpoint.connect(addr, ALPN)).await {
         Ok(Ok(conn)) => conn,
         Ok(Err(_)) => return Err(FailureReason::Unreachable),
@@ -1028,10 +1059,88 @@ async fn run_dial(inner: &Arc<Inner>, addr: EndpointAddr) -> Result<(), FailureR
         .await
         .is_err()
     {
-        tracing::debug!(peer = %peer.fmt_short(), "could not remember dialed peer");
+        tracing::debug!(peer = %fields::peer(&peer), "could not remember dialed peer");
     }
     authorize(inner, conn, peer, Direction::Outbound, name);
     Ok(())
+}
+
+fn lan_label(mode: &LanMode) -> &'static str {
+    match mode {
+        LanMode::Mdns => "mdns",
+        LanMode::Off => "off",
+        #[cfg(any(test, feature = "test-support"))]
+        LanMode::Memory(_) => "memory",
+    }
+}
+
+/// Logs path and hole-punch events until the connection closes. A direct
+/// (IP) path means hole punching worked; a connection that never opened one
+/// stayed on the relay.
+async fn log_paths(peer: NodeId, initial: Vec<(TransportAddr, bool)>, mut events: PathEventStream) {
+    let mut direct = false;
+    for (addr, selected) in initial {
+        direct |= addr.is_ip();
+        tracing::info!(peer = %fields::peer(&peer), kind = fields::path_kind(&addr), addr = %fields::transport(&addr), "path opened");
+        if selected {
+            tracing::info!(peer = %fields::peer(&peer), kind = fields::path_kind(&addr), addr = %fields::transport(&addr), "path selected");
+        }
+    }
+    while let Some(event) = events.next().await {
+        match event {
+            PathEvent::Opened { remote_addr, .. } => {
+                direct |= remote_addr.is_ip();
+                tracing::info!(peer = %fields::peer(&peer), kind = fields::path_kind(&remote_addr), addr = %fields::transport(&remote_addr), "path opened");
+            }
+            PathEvent::Selected { remote_addr, .. } if remote_addr.is_ip() => {
+                tracing::info!(peer = %fields::peer(&peer), addr = %fields::transport(&remote_addr), "direct path selected (hole punch succeeded)");
+            }
+            PathEvent::Selected { remote_addr, .. } => {
+                tracing::info!(peer = %fields::peer(&peer), kind = fields::path_kind(&remote_addr), addr = %fields::transport(&remote_addr), "path selected");
+            }
+            PathEvent::Closed { remote_addr, .. } => {
+                tracing::debug!(peer = %fields::peer(&peer), kind = fields::path_kind(&remote_addr), addr = %fields::transport(&remote_addr), "path closed");
+            }
+            _ => {}
+        }
+    }
+    let outcome = if direct { "direct" } else { "relay_only" };
+    tracing::info!(peer = %fields::peer(&peer), outcome, "hole punch outcome");
+}
+
+/// Logs home relay connection changes until the endpoint closes.
+async fn watch_home_relay(endpoint: Endpoint) {
+    let mut watcher = endpoint.home_relay_status();
+    let closed = endpoint.closed();
+    tokio::pin!(closed);
+    let mut last: Vec<(RelayUrl, bool)> = Vec::new();
+    loop {
+        let statuses = watcher.get();
+        let current: Vec<(RelayUrl, bool)> = statuses
+            .iter()
+            .map(|s| (s.url().clone(), s.is_connected()))
+            .collect();
+        if current != last {
+            for status in &statuses {
+                let connected = status.is_connected();
+                match status.last_error() {
+                    Some(e) if !connected => {
+                        tracing::warn!(relay = %status.url(), connected, error = %e, "home relay");
+                    }
+                    _ => tracing::info!(relay = %status.url(), connected, "home relay"),
+                }
+            }
+            last = current;
+        }
+        tokio::select! {
+            updated = watcher.updated() => {
+                if updated.is_err() {
+                    break;
+                }
+            }
+            _ = &mut closed => break,
+        }
+    }
 }
 
 /// Why a connection we dialed ended before it was authorized.
@@ -1071,6 +1180,7 @@ async fn watch_ticket(inner: Arc<Inner>) {
         let current = watcher.get();
         if addr_set_changed(&last, &current) {
             last = current;
+            tracing::debug!("ticket changed");
             inner.emit(NetEvent::MyTicketChanged);
             tokio::select! {
                 _ = sleep(TICKET_CHANGE_DEBOUNCE) => {}
@@ -1106,6 +1216,10 @@ async fn lan_loop(inner: Arc<Inner>, mut events: tokio::sync::mpsc::Receiver<Lan
                     (changed, name)
                 };
                 dirty |= changed;
+                if changed {
+                    let seen = if expired { "LAN peer vanished" } else { "LAN peer appeared" };
+                    tracing::debug!(peer = %fields::peer(&id), "{seen}");
+                }
                 if expired {
                     observed.remove(&id);
                 } else if let Some(name) = name {
@@ -1118,7 +1232,7 @@ async fn lan_loop(inner: Arc<Inner>, mut events: tokio::sync::mpsc::Receiver<Lan
                             })
                             .await;
                             if recorded.is_err() {
-                                tracing::debug!(peer = %id.fmt_short(), "could not record peer name");
+                                tracing::debug!(peer = %fields::peer(&id), "could not record peer name");
                             }
                         });
                     }

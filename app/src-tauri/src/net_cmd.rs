@@ -17,11 +17,12 @@ use messenger_core::discovery::{
     RespondError, StartError,
 };
 use messenger_core::identity::{
-    ticket_to_qr_svg, validate_relay_url, AccountId, FileSettingsStore, IdentityService,
-    IdentityStatus, KeychainStore, NodeId, SettingsError, SettingsStore, TicketError,
+    ticket_to_qr_svg, validate_relay_url, AccountId, IdentityService, IdentityStatus,
+    KeychainStore, NodeId, SettingsError, SettingsStore, SqlCipherSettingsStore, TicketError,
     TicketProvider,
 };
 use messenger_core::messaging::MessagingConfig;
+use messenger_core::storage::Storage;
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -323,7 +324,7 @@ pub fn forward(ev: &NetEvent, emit: impl Fn(&str, Value)) {
 
 /// Everything `ensure_started` needs besides the identity service.
 pub struct NetBoot {
-    pub settings: Arc<FileSettingsStore>,
+    pub settings: Arc<SqlCipherSettingsStore>,
     pub tickets: LiveTicketProvider,
 }
 
@@ -334,6 +335,7 @@ pub struct NetBoot {
 /// never lands without an `account_id` to key it. A stored relay that cannot
 /// be read or saved refuses the start rather than falling back to the default
 /// mesh. Returns whether this call started a node.
+#[allow(clippy::too_many_arguments)]
 pub async fn start_if_present<K: KeychainStore, S: SettingsStore, T: TicketProvider>(
     state: &NetState,
     identity: &IdentityService<K, S, T>,
@@ -341,6 +343,7 @@ pub async fn start_if_present<K: KeychainStore, S: SettingsStore, T: TicketProvi
     tickets: LiveTicketProvider,
     contacts: &ContactsState,
     chat: &ChatState,
+    storage: &Storage,
     mut config: NodeConfig,
 ) -> bool {
     let (account, known) = match identity.status() {
@@ -353,9 +356,11 @@ pub async fn start_if_present<K: KeychainStore, S: SettingsStore, T: TicketProvi
         ),
         _ => return false,
     };
-    // A failed open leaves contacts and networking usable; erase fails closed.
-    if let Err(e) = chat.open_store(identity) {
-        eprintln!("message store unavailable: {e}");
+    // A storage failure is a blocking, user-visible state (DD-05: corruption is
+    // never a silent reset); the node starts after `storage_retry` succeeds.
+    if let Err(e) = chat.open_store(storage, &account) {
+        tracing::warn!(error = %e, "message store unavailable");
+        return false;
     }
     let start = async {
         let relay_err = |what: &str| StartError::Bind(format!("relay setting {what}"));
@@ -388,6 +393,7 @@ pub fn ensure_started(app: &AppHandle) {
         let identity = app.state::<AppIdentity>();
         let contacts = app.state::<Arc<ContactsState>>();
         let chat = app.state::<Arc<ChatState>>();
+        let storage = app.state::<Arc<Storage>>();
         let started = start_if_present(
             &state,
             &*identity,
@@ -395,6 +401,7 @@ pub fn ensure_started(app: &AppHandle) {
             boot.tickets.clone(),
             &contacts,
             &chat,
+            &storage,
             NodeConfig::desktop(),
         )
         .await;
@@ -410,7 +417,7 @@ pub fn ensure_started(app: &AppHandle) {
             {
                 Ok(messaging) => Some(messaging.subscribe()),
                 Err(_) => {
-                    eprintln!("messaging unavailable; chat sending is disabled");
+                    tracing::warn!("messaging unavailable; chat sending is disabled");
                     None
                 }
             },
@@ -865,8 +872,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn contacts_bound_even_if_node_start_fails() {
         let dir = tempfile::tempdir().unwrap();
-        let (identity, settings, tickets) = provisioned_identity(&dir);
-        identity.provision().unwrap();
+        let (identity, settings, tickets, storage) = provisioned_identity(&dir);
+        provision_db(&identity, &storage);
         let broken = Arc::new(FlakyPresence {
             inner: settings,
             fail: false,
@@ -883,6 +890,7 @@ mod tests {
             tickets,
             &contacts,
             &ChatState::new(),
+            &storage,
             NodeConfig::loopback(),
         )
         .await;
@@ -894,7 +902,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn start_opens_message_store_when_identity_present() {
         let dir = tempfile::tempdir().unwrap();
-        let (identity, settings, tickets) = provisioned_identity(&dir);
+        let (identity, settings, tickets, storage) = provisioned_identity(&dir);
         let chat = ChatState::new();
         let state = NetState::default();
         let contacts = test_contacts();
@@ -907,6 +915,7 @@ mod tests {
                     tickets.clone(),
                     &contacts,
                     &chat,
+                    &storage,
                     NodeConfig::loopback(),
                 )
                 .await
@@ -916,11 +925,11 @@ mod tests {
         assert!(!start!());
         assert!(chat.store_ref().is_err(), "no store without an identity");
 
-        identity.provision().unwrap();
+        provision_db(&identity, &storage);
         assert!(start!());
         let (account, store) = chat.store_ref().expect("store opened");
         assert_eq!(account, account_of(&identity));
-        assert!(dir.path().join(messenger_core::messaging::DB_FILE).exists());
+        assert!(dir.path().join(messenger_core::storage::DB_FILE).exists());
         assert!(store
             .page(&account, &state.node().unwrap().node_id(), None, 1)
             .unwrap()
@@ -1017,18 +1026,36 @@ mod tests {
         peers.iter().any(|p| p.node_id == id.to_string())
     }
 
-    type Fixture = (TestIdentity, Arc<MemorySettingsStore>, LiveTicketProvider);
+    type Fixture = (
+        TestIdentity,
+        Arc<MemorySettingsStore>,
+        LiveTicketProvider,
+        Storage,
+    );
 
     fn provisioned_identity(dir: &tempfile::TempDir) -> Fixture {
         let settings = Arc::new(MemorySettingsStore::new());
         let tickets = LiveTicketProvider::new();
+        let keychain = Arc::new(FakeKeychain::new());
         let identity = IdentityService::new(
-            Arc::new(FakeKeychain::new()),
+            keychain.clone(),
             settings.clone(),
             tickets.clone(),
             dir.path(),
         );
-        (identity, settings, tickets)
+        (
+            identity,
+            settings,
+            tickets,
+            Storage::new(dir.path(), keychain),
+        )
+    }
+
+    /// Provisions and creates the DB, as the first-run flow does.
+    fn provision_db(identity: &TestIdentity, storage: &Storage) -> AccountId {
+        let account = identity.provision().unwrap().account_id;
+        storage.database_creating(&account).unwrap();
+        account
     }
 
     fn test_contacts() -> ContactsState {
@@ -1043,6 +1070,7 @@ mod tests {
         identity: &TestIdentity,
         settings: &Arc<MemorySettingsStore>,
         tickets: &LiveTicketProvider,
+        storage: &Storage,
     ) -> bool {
         start_if_present(
             state,
@@ -1051,6 +1079,7 @@ mod tests {
             tickets.clone(),
             &test_contacts(),
             &ChatState::new(),
+            storage,
             NodeConfig::loopback(),
         )
         .await
@@ -1104,12 +1133,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn relay_env_valid_is_set_and_stored_on_start() {
         let dir = tempfile::tempdir().unwrap();
-        let (identity, settings, tickets) = provisioned_identity(&dir);
-        identity.provision().unwrap();
+        let (identity, settings, tickets, storage) = provisioned_identity(&dir);
+        provision_db(&identity, &storage);
         let account = account_of(&identity);
         let state = NetState::new(RelayOverride::Set("https://relay.example/".into()));
 
-        assert!(start_with_override(&state, &identity, &settings, &tickets).await);
+        assert!(start_with_override(&state, &identity, &settings, &tickets, &storage).await);
         assert_eq!(
             settings.get_relay_url(&account).unwrap().as_deref(),
             Some("https://relay.example/")
@@ -1120,15 +1149,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn relay_env_default_clears_stored_value() {
         let dir = tempfile::tempdir().unwrap();
-        let (identity, settings, tickets) = provisioned_identity(&dir);
-        identity.provision().unwrap();
+        let (identity, settings, tickets, storage) = provisioned_identity(&dir);
+        provision_db(&identity, &storage);
         let account = account_of(&identity);
         settings
             .set_relay_url(&account, Some("https://old.example"))
             .unwrap();
         let state = NetState::new(RelayOverride::Clear);
 
-        assert!(start_with_override(&state, &identity, &settings, &tickets).await);
+        assert!(start_with_override(&state, &identity, &settings, &tickets, &storage).await);
         assert_eq!(settings.get_relay_url(&account).unwrap(), None);
         state.shutdown_with_timeout(Duration::from_secs(2)).await;
     }
@@ -1136,15 +1165,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn relay_env_unset_leaves_stored_value() {
         let dir = tempfile::tempdir().unwrap();
-        let (identity, settings, tickets) = provisioned_identity(&dir);
-        identity.provision().unwrap();
+        let (identity, settings, tickets, storage) = provisioned_identity(&dir);
+        provision_db(&identity, &storage);
         let account = account_of(&identity);
         settings
             .set_relay_url(&account, Some("https://kept.example"))
             .unwrap();
         let state = NetState::default();
 
-        assert!(start_with_override(&state, &identity, &settings, &tickets).await);
+        assert!(start_with_override(&state, &identity, &settings, &tickets, &storage).await);
         assert_eq!(
             settings.get_relay_url(&account).unwrap().as_deref(),
             Some("https://kept.example/")
@@ -1155,7 +1184,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn relay_override_applied_only_once_account_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let (identity, settings, tickets) = provisioned_identity(&dir);
+        let (identity, settings, tickets, storage) = provisioned_identity(&dir);
         let state = NetState::new(RelayOverride::Set("https://relay.example/".into()));
         let contacts = test_contacts();
         let started = start_if_present(
@@ -1165,6 +1194,7 @@ mod tests {
             tickets.clone(),
             &contacts,
             &ChatState::new(),
+            &storage,
             NodeConfig::loopback(),
         )
         .await;
@@ -1172,11 +1202,11 @@ mod tests {
         assert!(state.node().is_err());
         assert!(contacts.book().is_none(), "no book without an identity");
 
-        let provisioned = identity.provision().unwrap();
-        assert!(start_with_override(&state, &identity, &settings, &tickets).await);
+        let provisioned_account = provision_db(&identity, &storage);
+        assert!(start_with_override(&state, &identity, &settings, &tickets, &storage).await);
         assert_eq!(
             settings
-                .get_relay_url(&provisioned.account_id)
+                .get_relay_url(&provisioned_account)
                 .unwrap()
                 .as_deref(),
             Some("https://relay.example/")
@@ -1210,7 +1240,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn rename_without_a_node_still_saves() {
         let dir = tempfile::tempdir().unwrap();
-        let (identity, _settings, _tickets) = provisioned_identity(&dir);
+        let (identity, _settings, _tickets, _storage) = provisioned_identity(&dir);
         identity.provision().unwrap();
         let state = NetState::default();
         set_display_name_and_refresh(&identity, &state, "Ada").unwrap();

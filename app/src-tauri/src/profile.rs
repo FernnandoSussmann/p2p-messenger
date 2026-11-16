@@ -29,15 +29,20 @@ pub fn profile_from(
 
 pub struct ProfileLayout {
     pub data_dir: PathBuf,
+    pub log_dir: PathBuf,
     pub profile: Option<Profile>,
 }
 
-pub fn layout(base: &Path, profile: Option<Profile>) -> ProfileLayout {
-    let data_dir = match &profile {
-        Some(p) => p.data_dir(base),
-        None => base.to_path_buf(),
+pub fn layout(base_data: &Path, base_log: &Path, profile: Option<Profile>) -> ProfileLayout {
+    let (data_dir, log_dir) = match &profile {
+        Some(p) => (p.data_dir(base_data), p.data_dir(base_log)),
+        None => (base_data.to_path_buf(), base_log.to_path_buf()),
     };
-    ProfileLayout { data_dir, profile }
+    ProfileLayout {
+        data_dir,
+        log_dir,
+        profile,
+    }
 }
 
 pub fn window_title(base: &str, profile: Option<&Profile>) -> String {
@@ -103,12 +108,24 @@ mod tests {
     #[test]
     fn layout_isolates_profiles() {
         let base = Path::new("/data");
-        assert_eq!(layout(base, None).data_dir, base);
+        assert_eq!(layout(base, Path::new("/logs"), None).data_dir, base);
         let (a, b) = (Profile::parse("a").unwrap(), Profile::parse("b").unwrap());
         assert_ne!(a.keychain_service(), b.keychain_service());
-        let (la, lb) = (layout(base, Some(a)), layout(base, Some(b)));
+        let logs = Path::new("/logs");
+        let (la, lb) = (layout(base, logs, Some(a)), layout(base, logs, Some(b)));
         assert_ne!(la.data_dir, lb.data_dir);
         assert!(la.data_dir.starts_with(base));
+    }
+
+    #[test]
+    fn log_dir_is_profile_namespaced() {
+        let (data, logs) = (Path::new("/data"), Path::new("/logs"));
+        assert_eq!(layout(data, logs, None).log_dir, logs);
+        let (a, b) = (Profile::parse("a").unwrap(), Profile::parse("b").unwrap());
+        let (la, lb) = (layout(data, logs, Some(a)), layout(data, logs, Some(b)));
+        assert_ne!(la.log_dir, lb.log_dir);
+        assert!(la.log_dir.starts_with(logs.join("profiles")));
+        assert_ne!(la.log_dir, la.data_dir);
     }
 
     #[test]

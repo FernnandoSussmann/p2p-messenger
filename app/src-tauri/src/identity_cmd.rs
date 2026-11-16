@@ -9,17 +9,21 @@ use std::sync::Arc;
 use messenger_core::discovery::LiveTicketProvider;
 use messenger_core::identity::KeychainStore;
 use messenger_core::identity::{
-    DisplayNameError, FileSettingsStore, IdentityService, IdentityStatus, KeychainError, LoadError,
-    MarkerError, MyInfoError, OsKeychain, ProvisionError, SetNameError, SettingsStore, StatusError,
-    TicketProvider,
+    DisplayNameError, IdentityService, IdentityStatus, KeychainError, LoadError, MarkerError,
+    MyInfoError, OsKeychain, ProvisionError, SetNameError, SettingsStore, SqlCipherSettingsStore,
+    StatusError, TicketProvider,
 };
+use messenger_core::storage::Storage;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
+use crate::chat_cmd::ChatState;
 use crate::net_cmd;
+use crate::storage_cmd;
 
 /// The service as wired by the app.
-pub type AppIdentity = IdentityService<OsKeychain, Arc<FileSettingsStore>, LiveTicketProvider>;
+pub type AppIdentity =
+    IdentityService<Arc<OsKeychain>, Arc<SqlCipherSettingsStore>, LiveTicketProvider>;
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
@@ -190,8 +194,15 @@ pub fn identity_status(service: State<'_, AppIdentity>) -> StatusDto {
 pub fn identity_provision(
     app: AppHandle,
     service: State<'_, AppIdentity>,
+    storage: State<'_, Arc<Storage>>,
+    chat: State<'_, Arc<ChatState>>,
 ) -> Result<ProvisionDto, IdentityCmdError> {
     let provisioned = provision(&service)?;
+    // Decide the storage state before the node starts; the wizard then shows a
+    // failure through `storage_status`.
+    if let IdentityStatus::Present { account_id, .. } = service.status() {
+        let _ = storage_cmd::open_for(&storage, &chat, &account_id);
+    }
     net_cmd::ensure_started(&app);
     Ok(provisioned)
 }
@@ -394,6 +405,46 @@ mod tests {
             provision(&service).unwrap_err(),
             IdentityCmdError::AlreadyProvisioned
         );
+    }
+
+    #[test]
+    fn first_run_flow_end_to_end_with_encrypted_settings() {
+        use messenger_core::identity::SqlCipherSettingsStore;
+
+        type EncryptedService =
+            IdentityService<Arc<FakeKeychain>, SqlCipherSettingsStore, NodeIdTicketProvider>;
+        let dir = tempfile::tempdir().unwrap();
+        let keychain = Arc::new(FakeKeychain::new());
+        let build = || -> EncryptedService {
+            let storage = Arc::new(Storage::new(dir.path(), keychain.clone()));
+            IdentityService::new(
+                keychain.clone(),
+                SqlCipherSettingsStore::new(storage),
+                NodeIdTicketProvider,
+                dir.path(),
+            )
+        };
+
+        let service = build();
+        let provisioned = provision(&service).unwrap();
+        set_display_name(&service, "Alice").unwrap();
+        assert_eq!(
+            my_info(&service).unwrap().display_name.as_deref(),
+            Some("Alice")
+        );
+        drop(service);
+
+        let restarted = build();
+        match status(&restarted) {
+            StatusDto::Present { node_id, .. } => assert_eq!(node_id, provisioned.node_id),
+            other => panic!("expected Present, got {other:?}"),
+        }
+        assert_eq!(
+            my_info(&restarted).unwrap().display_name.as_deref(),
+            Some("Alice")
+        );
+        assert!(dir.path().join(messenger_core::storage::DB_FILE).exists());
+        assert!(!dir.path().join("settings.json").exists());
     }
 
     #[test]

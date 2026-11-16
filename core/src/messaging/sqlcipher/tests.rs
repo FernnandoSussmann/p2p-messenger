@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use protocol::{new_message_id, ChatMessage, MAX_BODY_BYTES};
 
 use super::*;
-use crate::identity::testing::FakeKeychain;
-use crate::identity::{MemorySettingsStore, NodeIdTicketProvider};
+use crate::identity::{AccountId, DbKey};
 use crate::messaging::contract::{chat, contract_suite, node};
+use crate::storage::{Create, Database, DB_FILE, MIGRATIONS};
 
 fn key() -> DbKey {
     DbKey::from_bytes(rand::random::<[u8; 32]>())
@@ -17,7 +17,8 @@ fn db_path(dir: &tempfile::TempDir) -> PathBuf {
 }
 
 fn open(dir: &tempfile::TempDir, key: &DbKey) -> SqlCipherMessageStore {
-    SqlCipherMessageStore::open_with_key(&db_path(dir), key).unwrap()
+    let db = Database::open(&db_path(dir), key, MIGRATIONS, Create::Allowed).unwrap();
+    SqlCipherMessageStore::new(Arc::new(db))
 }
 
 fn canary() -> String {
@@ -61,38 +62,6 @@ fn sqlcipher_store_meets_contract() {
 }
 
 #[test]
-fn sqlcipher_reports_cipher_version() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = open(&dir, &key());
-    let version: String = store
-        .conn()
-        .unwrap()
-        .query_row("PRAGMA cipher_version", [], |r| r.get(0))
-        .unwrap();
-    assert!(!version.is_empty());
-}
-
-#[test]
-fn fts5_trigram_is_available() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = open(&dir, &key());
-    let conn = store.conn().unwrap();
-    conn.execute_batch(
-        "CREATE VIRTUAL TABLE temp.t USING fts5 (x, tokenize = 'trigram');
-         INSERT INTO temp.t (x) VALUES ('hello world');",
-    )
-    .unwrap();
-    let hits: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM temp.t WHERE t MATCH '\"lo wo\"'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(hits, 1);
-}
-
-#[test]
 fn reopen_with_same_key_reads_rows() {
     let dir = tempfile::tempdir().unwrap();
     let (k, account, peer) = (key(), AccountId::new(), node());
@@ -113,48 +82,6 @@ fn reopen_with_same_key_reads_rows() {
         store.search(&account, None, "persisted", 10).unwrap().len(),
         1
     );
-}
-
-#[test]
-fn wrong_key_is_reported_and_file_untouched() {
-    let dir = tempfile::tempdir().unwrap();
-    let (account, peer) = (AccountId::new(), node());
-    open(&dir, &key())
-        .insert_outgoing(&account, &peer, &chat(1, "x"), MessageStatus::Sending)
-        .unwrap();
-    let before = fs::read(db_path(&dir)).unwrap();
-    let err = SqlCipherMessageStore::open_with_key(&db_path(&dir), &key())
-        .err()
-        .unwrap();
-    assert_eq!(err, MessageStoreError::WrongKeyOrCorrupt);
-    assert_eq!(fs::read(db_path(&dir)).unwrap(), before);
-}
-
-#[test]
-fn garbage_file_is_reported_and_left_in_place() {
-    let dir = tempfile::tempdir().unwrap();
-    let garbage = rand::random::<[u8; 64]>().repeat(64);
-    fs::write(db_path(&dir), &garbage).unwrap();
-    let err = SqlCipherMessageStore::open_with_key(&db_path(&dir), &key())
-        .err()
-        .unwrap();
-    assert_eq!(err, MessageStoreError::WrongKeyOrCorrupt);
-    assert_eq!(fs::read(db_path(&dir)).unwrap(), garbage);
-}
-
-#[test]
-fn newer_schema_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let k = key();
-    open(&dir, &k)
-        .conn()
-        .unwrap()
-        .execute_batch("PRAGMA user_version = 2;")
-        .unwrap();
-    let err = SqlCipherMessageStore::open_with_key(&db_path(&dir), &k)
-        .err()
-        .unwrap();
-    assert_eq!(err, MessageStoreError::NewerSchema);
 }
 
 #[test]
@@ -245,6 +172,8 @@ fn erase_leaves_no_plaintext_in_export() {
     store.erase_peer_history(&account, &gone).unwrap();
 
     let export = dir.path().join("export.plain");
+    // The connection is opened without SQLITE_OPEN_CREATE, so ATTACH needs the file.
+    fs::write(&export, b"").unwrap();
     {
         let conn = store.conn().unwrap();
         conn.execute(
@@ -259,16 +188,6 @@ fn erase_leaves_no_plaintext_in_export() {
     let plain = fs::read(&export).unwrap();
     assert!(contains(&plain, control.as_bytes()));
     assert!(!contains(&plain, secret.as_bytes()));
-}
-
-#[cfg(unix)]
-#[test]
-fn db_file_is_private() {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().unwrap();
-    open(&dir, &key());
-    let mode = fs::metadata(db_path(&dir)).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o600);
 }
 
 #[test]
@@ -298,48 +217,103 @@ fn insert_rejects_empty_and_oversized_bodies() {
     assert_eq!(store.page(&account, &peer, None, 10).unwrap().len(), 1);
 }
 
-#[test]
-fn store_errors_never_embed_details() {
-    let dir = tempfile::tempdir().unwrap();
-    let path_text = dir.path().to_string_lossy().into_owned();
-    let k = key();
-    open(&dir, &k);
-    let err = SqlCipherMessageStore::open_with_key(&db_path(&dir), &key())
-        .err()
-        .unwrap();
-    for e in [
-        err,
-        MessageStoreError::Unavailable,
-        MessageStoreError::NewerSchema,
-        MessageStoreError::NotEncrypted,
-        MessageStoreError::AlreadyExists,
-        MessageStoreError::InvalidBody,
-        MessageStoreError::InvalidQuery,
-    ] {
-        for shown in [e.to_string(), format!("{e:?}")] {
-            assert!(!shown.contains(&path_text));
-            assert!(!shown.contains(DB_FILE));
-            assert!(!shown.contains('/'));
-        }
+fn page_count(store: &SqlCipherMessageStore) -> i64 {
+    store
+        .conn()
+        .unwrap()
+        .pragma_query_value(None, "page_count", |r| r.get(0))
+        .unwrap()
+}
+
+fn fill(store: &SqlCipherMessageStore, account: &AccountId, peer: &NodeId, n: u32, body: &str) {
+    for i in 0..n {
+        store
+            .insert_outgoing(
+                account,
+                peer,
+                &chat(i64::from(i) + 1, &format!("{body} {i}")),
+                MessageStatus::Sending,
+            )
+            .unwrap();
     }
 }
 
 #[test]
-fn open_message_store_uses_the_identity_data_dir() {
+fn erase_reclaims_free_pages() {
     let dir = tempfile::tempdir().unwrap();
-    let identity = IdentityService::new(
-        FakeKeychain::new(),
-        MemorySettingsStore::new(),
-        NodeIdTicketProvider,
-        dir.path(),
-    );
-    assert_eq!(
-        open_message_store(&identity).err(),
-        Some(MessageStoreError::Unavailable)
-    );
-    assert!(!db_path(&dir).exists());
-    let provisioned = identity.provision().unwrap();
-    let (account, _) = open_message_store(&identity).unwrap();
-    assert_eq!(account, provisioned.account_id);
-    assert!(db_path(&dir).exists());
+    let (store, account, gone) = (open(&dir, &key()), AccountId::new(), node());
+    fill(&store, &account, &gone, 500, &"filler text ".repeat(20));
+    let before = page_count(&store);
+    store.erase_peer_history(&account, &gone).unwrap();
+    assert_eq!(store.freelist_count().unwrap(), 0);
+    assert!(page_count(&store) < before);
+}
+
+#[test]
+fn vacuumed_db_reopens_with_key_and_rejects_wrong_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let (k, account, keep, gone) = (key(), AccountId::new(), node(), node());
+    let store = open(&dir, &k);
+    fill(&store, &account, &keep, 3, "kept");
+    fill(&store, &account, &gone, 50, "erased");
+    store.erase_peer_history(&account, &gone).unwrap();
+    drop(store);
+    let reopened = open(&dir, &k);
+    assert_eq!(reopened.page(&account, &keep, None, 10).unwrap().len(), 3);
+    assert!(reopened.page(&account, &gone, None, 10).unwrap().is_empty());
+    drop(reopened);
+    assert!(Database::open(&db_path(&dir), &key(), MIGRATIONS, Create::Forbidden).is_err());
+}
+
+#[test]
+fn erase_raw_file_has_no_canary() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, account, keep, gone) = (open(&dir, &key()), AccountId::new(), node(), node());
+    let secret = canary();
+    fill(&store, &account, &keep, 5, "control");
+    fill(&store, &account, &gone, 20, &secret);
+    store.erase_peer_history(&account, &gone).unwrap();
+    for bytes in files_with_prefix(dir.path(), "") {
+        assert!(!contains(&bytes, secret.as_bytes()));
+    }
+}
+
+fn peak_rss_kb() -> Option<u64> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmHWM:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
+}
+
+#[test]
+#[ignore = "manual measurement: cargo test -p core --features test-support --lib vacuum_cost -- --ignored --nocapture"]
+fn vacuum_cost_on_100k_messages() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, account) = (open(&dir, &key()), AccountId::new());
+    let peers: Vec<NodeId> = (0..50).map(|_| node()).collect();
+    let body = "x".repeat(200);
+    {
+        let mut conn = store.conn().unwrap();
+        let tx = conn.transaction().unwrap();
+        for i in 0..100_000usize {
+            tx.execute(
+                "INSERT INTO messages (account_id, peer, message_id, direction, sent_at_ms, body, status) VALUES (?1, ?2, ?3, 'out', ?4, ?5, 'sent')",
+                rusqlite::params![
+                    account.as_uuid().as_bytes().as_slice(),
+                    peers[i % 50].to_string(),
+                    uuid::Uuid::new_v4().as_bytes().as_slice(),
+                    i as i64,
+                    format!("{body}{i}"),
+                ],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    let size = fs::metadata(db_path(&dir)).unwrap().len();
+    let rss_before = peak_rss_kb();
+    let start = std::time::Instant::now();
+    store.erase_peer_history(&account, &peers[0]).unwrap();
+    let elapsed = start.elapsed();
+    let delta = rss_before.zip(peak_rss_kb()).map(|(a, b)| b - a);
+    println!("db_bytes={size} wall={elapsed:?} rss_delta_kb={delta:?}");
 }

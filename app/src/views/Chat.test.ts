@@ -8,11 +8,12 @@ vi.mock("../chat", async (orig) => ({
   chatSend: vi.fn(),
   chatResend: vi.fn(),
   historySearch: vi.fn(),
+  historyClear: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => vi.fn()) }));
 
 import Chat from "./Chat.svelte";
-import { chatHistory, historySearch, type MessageDto } from "../chat";
+import { chatHistory, historyClear, historySearch, type MessageDto } from "../chat";
 import { contacts } from "../lib/contactsStore";
 import { connections } from "../lib/netStore";
 import { closeChat, openChat } from "../lib/chatStore";
@@ -94,5 +95,31 @@ describe("Chat", () => {
     await show([]);
     await fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(onBack).toHaveBeenCalled();
+  });
+
+  for (const [label, known] of [["contacts", true], ["removed contacts", false]] as const) {
+    it(`clear_history_is_reachable_for_${label.replace(" ", "_")}`, async () => {
+      if (!known) contacts.set([]);
+      await show([mk(1)]);
+      expect(screen.getByRole("button", { name: "Clear history…" })).toBeEnabled();
+    });
+  }
+
+  it("clear_history_empties_log_and_search", async () => {
+    vi.mocked(historyClear).mockResolvedValue(undefined);
+    await show([mk(1), mk(2)]);
+    vi.mocked(historySearch).mockResolvedValue([mk(1)]);
+    await fireEvent.input(screen.getByLabelText("Search this conversation"), { target: { value: "body" } });
+    await screen.findByTestId("search-results");
+    const open = screen.getByRole("button", { name: "Clear history…" });
+    await fireEvent.click(open);
+    expect(open).toBeDisabled();
+    expect(screen.getByRole("dialog", { name: "Clear history" }).textContent).toContain("Bob");
+    await fireEvent.click(screen.getByRole("button", { name: "Clear history" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("History cleared."));
+    expect(historyClear).toHaveBeenCalledWith(ID);
+    expect(screen.queryAllByTestId("message")).toHaveLength(0);
+    expect(screen.queryByTestId("search-results")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

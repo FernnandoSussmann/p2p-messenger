@@ -16,7 +16,7 @@ only once they carry real code — no empty stubs or placeholder modules.
 | Crate      | Status  | Responsibility                                               |
 | ---------- | ------- | ------------------------------------------------------------ |
 | `protocol` | present | Shared serde wire types (`Envelope`, `Payload`, …) + version |
-| `core`     | present | UI-agnostic logic by slices: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence) and `contacts` (contact book, trust, interim store) and `messaging` (encrypted message store and delivery engine) |
+| `core`     | present | UI-agnostic logic by slices: `identity`, `discovery` (iroh node, LAN mDNS discovery + presence) and `contacts` (contact book, trust, encrypted contact store) and `messaging` (message store and delivery engine) and `storage` (the single encrypted `messenger.db`: keyed open, typed errors, migrations, one-shot import of the old plaintext files) and `logging` (rotating diagnostic log file) |
 | `app`      | present | Thin Tauri v2 + Svelte shell over `core`                     |
 | `headless` | present | Test-only headless node + file keyring for Level-3 simulation; never shipped, never used by `app` |
 
@@ -64,11 +64,12 @@ Trust rule: trust is the peer's NodeId, kept as a contact.
   name changes by the peer never change your nickname.
 - Two contacts may share a nickname; the NodeId tells them apart.
 - Declined or expired requests leave no trace.
-- Contacts are kept per account in `contacts.json` **in plaintext (nicknames
-  included) until DD-05's encrypted DB replaces it**.
-- An existing `known_peers.json` is migrated once at startup and deleted; its
-  peers still connect without a prompt. If the migration fails, they are
-  prompted again.
+- Contacts are kept per account in the encrypted `messenger.db` (see
+  Encrypted storage).
+- An existing `known_peers.json` is imported once at startup as Unverified
+  contacts and then removed; its peers still connect without a prompt. If the
+  file is unreadable it is skipped, left on disk **unencrypted**, and those
+  peers are prompted again; you can delete it yourself.
 
 Names (yours and peers') may no longer contain invisible characters such as
 zero-width spaces. Joiners are allowed only inside emoji sequences (👨‍👩‍👧,
@@ -97,19 +98,70 @@ in the Accept, naming and rename prompts, never in the list.
   stored messages with that contact from the encrypted message database.
 - Copying a NodeId: choose **Show full NodeId**, select it and use your
   system's copy shortcut.
-- Contacts are stored in plaintext until DD-05.
+- Contacts, including nicknames, are stored encrypted in `messenger.db`.
 
-### Message storage
+### Encrypted storage
 
-Messages live in `messenger.db` in the (profile) data directory, encrypted with
-SQLCipher under the database key held in your OS keychain. A wrong key or a
-corrupt file is reported, and the file is never reset or recreated.
+Settings (display name, presence, relay override), contacts and messages all
+live in `messenger.db` in the (profile) data directory, encrypted with
+SQLCipher under the database key held in your OS keychain. The `storage` slice
+opens it, runs an integrity check, and applies forward-only, transactional
+schema migrations (messages, settings, contacts and the import bookkeeping are
+migrations 1 to 4). Nothing else on disk holds user data.
+
+If the database cannot be opened (wrong or missing key, damaged file, newer
+schema, failed migration, or the file is missing while an identity exists), the
+app shows **Encrypted storage unavailable** with a **Retry** button, and
+networking stays down until it opens. The file is never reset, deleted or
+recreated, and there is no "reset database" action. A missing file is
+recreated only during first-run provisioning or while importing legacy
+plaintext data. A first-run provisioning that fails removes only the empty
+database it just created, so running the wizard again works.
+
+**Upgrading from the plaintext files.** Older versions kept `settings.json`,
+`contacts.json` and `known_peers.json` in the data directory. On the first
+start the app imports them into `messenger.db` in one transaction per file,
+then overwrites them with zeros and deletes them. A contact you remove later
+is never re-imported. If `settings.json` or `contacts.json` is corrupt or not a
+regular file, the storage screen shows an error, nothing is imported and the
+file is left untouched (fix or delete it, then Retry). A corrupt
+`known_peers.json` does not block: it is skipped, those peers are prompted
+again, and the file **stays on disk unencrypted** until you delete it.
+Overwriting a file does not guarantee erasure on SSDs, copy-on-write file
+systems (APFS, btrfs) or in backups and snapshots.
+
+### Diagnostic logs
+
+The app writes a local diagnostic log, `messenger.log`, to the OS app log
+directory (a `profiles/<name>` subfolder under it for a `--profile`):
+
+- Linux: `$XDG_DATA_HOME/<app identifier>/logs` (usually
+  `~/.local/share/<app identifier>/logs`)
+- macOS: `~/Library/Logs/<app identifier>`
+- Windows: `%LOCALAPPDATA%\<app identifier>\logs`
+
+The default level is `info`. Set `MESSENGER_LOG` to `off`, `error`, `warn`,
+`info`, `debug` or `trace` to change it (our own crates only; third-party
+crates are capped at `warn`). Any other value refuses to start. `off` creates
+no file.
+
+Size is bounded: at most 5 files of 2 MiB each (`messenger.log` plus four
+rotated copies). On Unix the folder is `0700` and the files `0600`.
+
+Logged: connection lifecycle, hole-punch and path events, relay status,
+discovery events and errors, identified by short NodeId and address.
+Never logged: message bodies, search queries, display names and nicknames, the
+identity key, the database key and ticket strings. Logs are local only and
+never sent anywhere.
+
+Logs reveal *who* you connected to and *when* (short NodeIds, IP addresses).
+Deleting the log folder is a privacy action and is safe at any time.
 
 ### Chat
 
 Open **Contacts**, then a contact row's **Message** button. **Back** (or any tab)
 returns to the tabs; an unread count shows on the button while the chat is closed.
-Commands: `chat_send`, `chat_resend`, `chat_history` and `history_search`; events:
+Commands: `chat_send`, `chat_resend`, `chat_history`, `history_search` and `history_clear`; events:
 `message_received`, `message_status` and `chat_resync`.
 
 - Status: **Sending**, **Delivered**, **Pending** (waits for a connection and is
@@ -127,7 +179,14 @@ Commands: `chat_send`, `chat_resend`, `chat_history` and `history_search`; event
   zero-width or control characters show as �.
 - Search within a conversation finds words in its history. History and search
   read the encrypted store, so they work even if the node failed to start.
-  Storage is `messenger.db` (see Message storage).
+  Storage is `messenger.db` (see Encrypted storage).
+- **Clear history…** (in the chat header, also for removed contacts) deletes the
+  whole conversation after a confirmation. The messages are removed from this
+  device's encrypted database and the space they used is overwritten. This cannot
+  remove the other person's copy, backups or snapshots of this computer, or
+  traces some storage hardware (such as SSDs) may keep. Messages still waiting to
+  be sent are marked Not delivered. Remove contact with "Also delete our message
+  history" uses the same path.
 
 ### On this network, presence and relay
 
@@ -169,7 +228,9 @@ git config core.hooksPath .githooks
 
 It blocks the commit on any failure of: `cargo fmt --all --check`,
 `cargo clippy --all-targets --all-features -- -D warnings`,
-`cargo test --workspace` (includes the secret-leak guards), the secret grep
+`cargo test --workspace` (includes the secret-leak guards, the log redaction
+guard `log_redaction_guard` and the SQL namespacing guard
+`sql_namespacing_guard`), the secret grep
 gates (no key types under `app/`; clipboard only in `MyInfo.svelte`), and the
 frontend `npm run check`, `npm test` and `npm run build`.
 
@@ -184,7 +245,11 @@ No Tauri WebDriver driver is available in this environment, so the first-run
 flow is automated at command-invoke level (`first_run_flow_end_to_end` in
 `app/src-tauri/src/identity_cmd.rs`, `ticket_connect_accept_flow_end_to_end` in
 `app/src-tauri/src/net_cmd.rs`, `chat_flow_end_to_end` in
-`app/src-tauri/src/chat_cmd/tests.rs`) and component level (vitest). Check by
+`app/src-tauri/src/chat_cmd/tests.rs`), the storage screen flows
+(`app/src-tauri/src/storage_cmd/tests.rs`: `wrong_key_surfaces_error_and_keeps_file`,
+`retry_recovers_after_key_restored`), `history_clear_end_to_end` and
+`remove_with_erase_clears_chat_history_end_to_end`, and component level
+(vitest). Check by
 hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 
 1. First launch shows the wizard; empty or whitespace names are rejected.
@@ -246,10 +311,30 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 27. Remove the contact with "Also delete our message history", then re-add it:
     the chat is empty. Without the option, the history remains. Queued Pending
     messages for a removed contact show Not delivered.
+    Clear history… while connected empties your chat and search, and the peer's
+    history is unchanged. Clear history… of a removed contact works too, and
+    search then finds nothing. `grep -c <cleared word> <profile data dir>/messenger.db`
+    returns 0.
 28. Empty or whitespace input keeps Send disabled. A paste over 16 KiB disables
     Send and shows the counter.
 29. `grep -c "<a word you sent>" <profile data dir>/messenger.db` returns 0 (the
     file is encrypted).
+30. Quit, then `head -c 8192 /dev/urandom > <profile data dir>/messenger.db`
+    (after copying the real file aside) and launch: **Encrypted storage
+    unavailable** shows, the file is untouched, and after restoring the backup
+    copy **Retry** returns to the main screen.
+31. Quit and move `messenger.db` away from a profile that has an identity, then
+    launch: the same screen shows with the "missing" reason and no new
+    `messenger.db` is created. Move it back and **Retry**.
+32. With two instances connected, each profile's log folder contains
+    `messenger.log` (`0600` inside a `0700` folder) with `connection state` and
+    `path opened` lines. No name, nickname, message text or ticket appears in it.
+33. `MESSENGER_LOG=bogus npm start` refuses to start with a clear message.
+34. Upgrade a profile created by the previous version: launch it. Settings
+    (display name, visibility, relay) and contacts are kept, `settings.json`
+    and `contacts.json` are gone from the data dir, and no new prompts appear
+    for accepted peers. A `known_peers.json` that could not be parsed may
+    remain; it is plaintext and can be deleted.
 
 ## Two-device simulation
 

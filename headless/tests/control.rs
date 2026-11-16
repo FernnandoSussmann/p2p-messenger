@@ -309,13 +309,11 @@ fn connect_and_accept_as(a: &Headless, b: &Headless, nickname: &[&str]) {
 }
 
 fn nicknames(node: &Headless) -> Vec<String> {
-    let doc: Value =
-        serde_json::from_slice(&std::fs::read(node.dir.join("contacts.json")).unwrap()).unwrap();
-    doc["accounts"]
-        .as_object()
+    let reply = node.ctl(&["contacts"]);
+    reply["contacts"]
+        .as_array()
         .unwrap()
-        .values()
-        .flat_map(|peers| peers.as_object().unwrap().values())
+        .iter()
         .map(|c| c["nickname"].as_str().unwrap().to_owned())
         .collect()
 }
@@ -354,6 +352,40 @@ fn respond_accept_with_and_without_nickname() {
     a.stop();
     b.stop();
     c.stop();
+}
+
+#[test]
+fn contacts_query_lists_nicknames() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, b) = start_pair(tmp.path());
+    assert_eq!(a.ctl(&["contacts"]), json!({"ok": true, "contacts": []}));
+    connect_and_accept_as(&a, &b, &["Bobby"]);
+    let b_id = b.ctl(&["node-id"])["node_id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        a.ctl(&["contacts"]),
+        json!({"ok": true, "contacts": [{"node_id": b_id, "nickname": "Bobby"}]})
+    );
+    a.stop();
+    b.stop();
+}
+
+#[test]
+fn headless_persists_contacts_encrypted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, b) = start_pair(tmp.path());
+    connect_and_accept_as(&a, &b, &["Bobby"]);
+    a.stop();
+    b.stop();
+
+    let dir_a = tmp.path().join("a");
+    let again = Headless::start(&dir_a, "Alice");
+    assert_eq!(nicknames(&again), ["Bobby"]);
+    again.stop();
+    assert!(dir_a.join("messenger.db").is_file());
+    assert!(!dir_a.join("contacts.json").exists());
+    assert!(!dir_a.join("settings.json").exists());
+    let db = std::fs::read(dir_a.join("messenger.db")).unwrap();
+    assert!(!String::from_utf8_lossy(&db).contains("Bobby"));
 }
 
 #[test]
