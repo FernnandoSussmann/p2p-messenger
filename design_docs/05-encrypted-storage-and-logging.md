@@ -1,7 +1,7 @@
 # DD-05 — Encrypted Storage & Diagnostic Logging
 
 **Feature slice:** cross-cutting `core` storage + logging infrastructure
-**Status:** Draft (v1)
+**Status:** Implemented (v1)
 **Related:** [DD-01 Identity](01-identity-onboarding-and-my-info.md),
 [DD-03 Contacts & Trust](03-contacts-and-trust.md),
 [DD-04 Messaging](04-messaging-and-delivery.md)
@@ -218,19 +218,40 @@ The thin surfaces exposed:
 
 ## Definition of done
 
-- [ ] One SQLCipher DB per install opens with the keychain-held key; wrong/missing
+- [x] One SQLCipher DB per install opens with the keychain-held key; wrong/missing
       key yields a recoverable error, never a silent reset.
-- [ ] Data is encrypted at rest yet fully queryable; scrollback and keyword
+- [x] Data is encrypted at rest yet fully queryable; scrollback and keyword
       search work on-device.
-- [ ] Every row is `account_id`-namespaced and every query filters on it.
-- [ ] Forward-only, transactional migrations evolve the schema without data loss.
-- [ ] `tracing` logs connection/hole-punch/relay/discovery events (NodeIds +
+- [x] Every row is `account_id`-namespaced and every query filters on it.
+- [x] Forward-only, transactional migrations evolve the schema without data loss.
+- [x] `tracing` logs connection/hole-punch/relay/discovery events (NodeIds +
       addresses) to a size-bounded rotating local file.
-- [ ] Message bodies, display names, and all secrets are provably never logged,
+- [x] Message bodies, display names, and all secrets are provably never logged,
       enforced by an automated guard in the mandatory local pre-commit test gate
       (see README — no CI is used).
-- [ ] History deletion removes rows and reclaims pages as far as feasible, with
+- [x] History deletion removes rows and reclaims pages as far as feasible, with
       honest UI about guarantees.
-- [ ] Logs are local-only, permission-restricted, and never transmitted.
-- [ ] All tests above pass; storage/logging live in `core` with real content
+- [x] Logs are local-only, permission-restricted, and never transmitted.
+- [x] All tests above pass; storage/logging live in `core` with real content
       only (no stubs).
+
+## Implementation notes
+
+- **Roller.** Logs use an in-tree size-based roller (`core::logging`: 5 files of
+  2 MiB, `0600` files in a `0700` dir, line cap, control/bidi neutralisation)
+  instead of `tracing-appender`, whose time-based rotation cannot bound total
+  size and which would add a dependency on the logging path.
+- **Namespacing exceptions.** Two tables lack `account_id`: `messages_fts`, the
+  FTS5 external-content index, reached only through a join on
+  `messages.account_id`; and `legacy_imports`, install-level bookkeeping of the
+  one-shot import. Both are allowlisted in `sql_namespacing_guard`.
+- **Settled decisions.** When the DB cannot open, the app blocks on the storage
+  screen until Retry. A failed provisioning deletes the DB only if that attempt
+  created it and it holds no user data. A corrupt `settings.json` or
+  `contacts.json` blocks with a typed error and imports nothing; a corrupt
+  `known_peers.json` is skipped and stays on disk as plaintext (documented, and
+  the user may delete it). Logs identify peers by short NodeId.
+- **Reclaim.** `history_clear` deletes rows and FTS postings, then runs `VACUUM`
+  with `secure_delete=ON`. This does not reach SSD wear-levelling, copy-on-write
+  file systems, backups or snapshots, nor the peer's copy; the UI copy
+  (`HISTORY_DELETE_GUARANTEE`) names these limits.

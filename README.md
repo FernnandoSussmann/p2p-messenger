@@ -228,7 +228,9 @@ git config core.hooksPath .githooks
 
 It blocks the commit on any failure of: `cargo fmt --all --check`,
 `cargo clippy --all-targets --all-features -- -D warnings`,
-`cargo test --workspace` (includes the secret-leak guards), the secret grep
+`cargo test --workspace` (includes the secret-leak guards, the log redaction
+guard `log_redaction_guard` and the SQL namespacing guard
+`sql_namespacing_guard`), the secret grep
 gates (no key types under `app/`; clipboard only in `MyInfo.svelte`), and the
 frontend `npm run check`, `npm test` and `npm run build`.
 
@@ -243,7 +245,11 @@ No Tauri WebDriver driver is available in this environment, so the first-run
 flow is automated at command-invoke level (`first_run_flow_end_to_end` in
 `app/src-tauri/src/identity_cmd.rs`, `ticket_connect_accept_flow_end_to_end` in
 `app/src-tauri/src/net_cmd.rs`, `chat_flow_end_to_end` in
-`app/src-tauri/src/chat_cmd/tests.rs`) and component level (vitest). Check by
+`app/src-tauri/src/chat_cmd/tests.rs`), the storage screen flows
+(`app/src-tauri/src/storage_cmd/tests.rs`: `wrong_key_surfaces_error_and_keeps_file`,
+`retry_recovers_after_key_restored`), `history_clear_end_to_end` and
+`remove_with_erase_clears_chat_history_end_to_end`, and component level
+(vitest). Check by
 hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 
 1. First launch shows the wizard; empty or whitespace names are rejected.
@@ -324,6 +330,11 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
     `messenger.log` (`0600` inside a `0700` folder) with `connection state` and
     `path opened` lines. No name, nickname, message text or ticket appears in it.
 33. `MESSENGER_LOG=bogus npm start` refuses to start with a clear message.
+34. Upgrade a profile created by the previous version: launch it. Settings
+    (display name, visibility, relay) and contacts are kept, `settings.json`
+    and `contacts.json` are gone from the data dir, and no new prompts appear
+    for accepted peers. A `known_peers.json` that could not be parsed may
+    remain; it is plaintext and can be deleted.
 
 ## Two-device simulation
 
