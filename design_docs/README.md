@@ -21,6 +21,7 @@ Svelte UI for one coherent feature.
 | 3 | [Contacts & Trust Model](03-contacts-and-trust.md) | `contacts` | `core::contacts`, `app` |
 | 4 | [Messaging & Delivery](04-messaging-and-delivery.md) | `messaging` | `core::messaging`, `protocol`, `app` |
 | 5 | [Encrypted Storage & Diagnostic Logging](05-encrypted-storage-and-logging.md) | cross-cutting | `core` (storage, logging) |
+| 6 | [Lean Build Footprint, Self-Cleaning Test Gate & End-User Binary](06-lean-build-footprint.md) | cross-cutting | build/test/release tooling, `app` |
 
 ## Conventions shared by all docs
 
@@ -43,8 +44,8 @@ Svelte UI for one coherent feature.
 
 ## Status
 
-All five docs are v1 drafts targeting the desktop build (Linux/macOS/Windows);
-DD-03 is implemented, with the deviations listed in its Status line.
+All six docs are v1 drafts targeting the desktop build (Linux/macOS/Windows);
+DD-03 is implemented, with the deviations listed in its Status line. DD-06 is implemented (see its Implementation notes).
 Mobile/web, attachments, offline store-and-forward, QR *scanning*, multiple
 identities, passphrase-at-rest, and multi-device sync are **out of scope** for
 v1 (see each doc's non-goals).
