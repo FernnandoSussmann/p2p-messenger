@@ -245,10 +245,67 @@ guard `log_redaction_guard` and the SQL namespacing guard
 gates (no key types under `app/`; clipboard only in `MyInfo.svelte`), and the
 frontend `npm run check`, `npm test` and `npm run build`.
 
+The gate is self-cleaning:
+
+- It builds in `target/gate`, never `target/debug`, with incremental
+  compilation off.
+- One run at a time per clone (a lock; `flock`, or an atomic `target/gate.lockdir`
+  where `flock` is missing). A symlinked `target/gate` is refused.
+- A toolchain (`rustc -vV`) or `Cargo.lock` change wipes the gate dir, so the
+  next run is cold.
+- After every run (pass, fail or Ctrl-C), `.githooks/gate-cleanup.sh` deletes
+  only the outputs of our own crates (`cargo clean -p` for `protocol`, `core`,
+  `messenger-headless` and `app`); third-party libraries stay cached.
+- If `target/gate` still exceeds a size cap it is wiped entirely. The cap is
+  `P2PM_GATE_MAX_MIB` (MiB, positive integer, default `8192`; anything else
+  falls back to the default).
+- On Linux the gate also fails if the `app` binary exports `sqlite3_*` symbols.
+- A cleanup failure after a passing gate only warns; the next run retries.
+- Never bypass the hook with `--no-verify`.
+
 Verifying the gate: stage a file under `app/` containing a planted
 secret-looking identifier (e.g. a Tauri return type referencing the key type
 name) and run `git commit`; the hook must reject it. Do this manually after
 changing the hook.
+
+### Reclaiming disk space
+
+- `cargo clean` removes everything, including `target/gate`.
+- Optional, never required: `cargo sweep --time 7` or `cargo sweep --installed`.
+- Manual `cargo test` writes to `target/debug` and is not auto-cleaned.
+- Folders: `target/debug/` holds the dev app and manual runs, `target/gate/` is
+  the hook's dependency cache, and `release/` holds end-user binaries.
+
+### Building the end-user binary
+
+```sh
+npm run release
+```
+
+Prerequisites: Rust 1.95+, Node.js 20+, and per OS: on Linux the WebKitGTK 4.1,
+GTK 3 and libsoup 3 dev packages plus `pkg-config` and binutils; on macOS the
+Xcode command line tools; on Windows the MSVC Build Tools.
+
+The script runs `npm ci` and `tauri build --no-bundle --ci -- --locked` in a
+throwaway temp target dir (with build paths remapped), then checks the binary:
+no test doubles, no builder paths, no exported `sqlite3_*` (Linux), stripped, no
+devtools, frontend embedded. Any failed check publishes nothing. The Windows
+builder-path check is implemented but not yet verified on Windows.
+
+Output: `release/p2p-messenger-<ver>-<os>-<arch>[.exe]` plus a `.sha256` file.
+Verify it with `sha256sum -c <name>.sha256` (Linux), `shasum -a 256 -c
+<name>.sha256` (macOS) or `Get-FileHash` (Windows). Builds are not claimed to be
+reproducible. The script never deletes or overwrites anything in `release/` (an
+existing same-name binary is refused); it only removes its own partial files.
+Interrupting it leaves no temp dir and no partial file.
+
+### Running the release binary
+
+- Linux: WebKitGTK 4.1, GTK 3, libsoup 3, D-Bus and a Secret Service keychain.
+- Windows: the WebView2 runtime (preinstalled on Windows 10/11).
+- macOS: nothing extra; a bare executable runs (an `.app` bundle is deferred).
+- `--profile`, `MESSENGER_PROFILE` and `MESSENGER_RELAY_URL` work at runtime,
+  exactly as in dev.
 
 ### Manual GUI checklist
 

@@ -2,11 +2,81 @@
 # Mandatory local gate (no CI). Install: git config core.hooksPath .githooks
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+repo="$(pwd -P)"
+
+# Self-cleaning gate: own target dir, no incremental, one run at a time.
+gate_dir="$repo/target/gate"
+lock="$repo/target/gate.lock"          # outside gate_dir: a wipe never deletes a held lock
+lockdir="$repo/target/gate.lockdir"    # fallback lock where flock(1) is missing
+mkdir -p "$repo/target"
+for p in "$gate_dir" "$lock" "$gate_dir/.gate-stamp"; do   # a symlinked target/ is allowed
+  if [ -L "$p" ]; then
+    echo "pre-commit: refusing symlinked ${p#"$repo"/}" >&2
+    exit 1
+  fi
+done
+
+have_lockdir=0
+if command -v flock >/dev/null 2>&1; then
+  exec 9>>"$lock"                      # append: never truncates
+  flock 9                              # waits for a concurrent gate run in this clone
+else
+  until mkdir "$lockdir" 2>/dev/null; do
+    holder="$(cat "$lockdir/pid" 2>/dev/null || true)"
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      rm -rf -- "$lockdir"             # holder is gone: stale lock
+    else
+      sleep 1
+    fi
+  done
+  have_lockdir=1
+  echo $$ > "$lockdir/pid"
+fi
+export CARGO_TARGET_DIR="$gate_dir"
+export CARGO_INCREMENTAL=0
+
+# Installed only after the lock is held: an interrupted *waiting* run must not
+# clean another run's in-flight build.
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  if ! "$repo/.githooks/gate-cleanup.sh" "$gate_dir"; then
+    echo "pre-commit: WARNING: gate cleanup failed; the next run retries it" >&2
+  fi
+  if [ "$have_lockdir" = 1 ]; then rm -rf -- "$lockdir"; fi
+  exit "$status"                       # the gate result, never the cleanup result
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Stamp: toolchain + lockfile. Any change wipes the gate dir before building.
+stamp="$(rustc -vV; git hash-object Cargo.lock)"
+if [ "$(cat "$gate_dir/.gate-stamp" 2>/dev/null || true)" != "$stamp" ]; then
+  "$repo/.githooks/gate-cleanup.sh" --wipe "$gate_dir"
+fi
+mkdir -p "$gate_dir"
+# Cargo only writes CACHEDIR.TAG when it creates the target dir itself; without it
+# `cargo clean` refuses to run in a dir we pre-created for the stamp.
+if [ ! -e "$gate_dir/CACHEDIR.TAG" ]; then
+  printf '%s\n' 'Signature: 8a477f597d28d172789f06886806bc55' \
+    '# This file is a cache directory tag created by cargo.' > "$gate_dir/CACHEDIR.TAG"
+fi
+printf '%s\n' "$stamp" > "$gate_dir/.gate-stamp"
 
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 cargo build
+
+# Exported-symbol gate (Linux). Fail closed: if nm fails, set -e aborts.
+if [ "$(uname -s)" = "Linux" ]; then
+  syms="$(nm -D --defined-only "$gate_dir/debug/app")"
+  if printf '%s\n' "$syms" | grep -E '[[:space:]]sqlite3_'; then
+    echo "pre-commit: app exports bundled sqlite3_* symbols (see app/src-tauri/build.rs)" >&2
+    exit 1
+  fi
+fi
 
 # Secret gate: key types must never appear in the app shell or frontend.
 if grep -RnE 'SecretKeyBytes|DbKey' app \

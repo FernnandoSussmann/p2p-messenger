@@ -28,3 +28,4 @@ rustc-ice-*.txt
 node_modules
 app/dist
 app/src-tauri/gen
+release/

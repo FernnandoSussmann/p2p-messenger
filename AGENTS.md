@@ -23,12 +23,14 @@ Cargo workspace built from vertical feature slices.
 | `docker/`        | **Test-only** `headless.Dockerfile`, `compose.yaml` and `smoke.sh` (two isolated nodes; `docker/smoke.sh` is not part of the hook). No stability or security guarantees. |
 | `app/src/`       | Svelte frontend (`views/`, `lib/`), Vitest tests alongside (`*.test.ts`).     |
 | `.githooks/`     | Tracked pre-commit hook: the mandatory local test gate (there is no CI).      |
+| `scripts/`       | `build-release.mjs`: `npm run release` builds and verifies the end-user binary into git-ignored `release/`. |
 
 Notes:
 - The package name `core` shadows std `core`; dependents import it with `package = "core"`.
 - Shared dependency versions live in the root `Cargo.toml` `[workspace.dependencies]`; member crates use `dep.workspace = true`.
 - `core` has a `test-support` feature exposing test doubles (e.g. `identity::testing`, `discovery::testing`, `contacts::testing`: `MemoryContactStore`, `FailingContactStore`, `RecordingHistoryEraser`, `BookCell`; `identity::MemorySettingsStore` (always available); `messaging::testing`: `MemoryMessageStore`, `FailingMessageStore`, `ChatPeer`, `Faults`, `send_raw_frame`). Discovery exposes authorized channels to other slices only through `ChannelHandler`; messaging never dials.
 - All persisted user data (settings, contacts, messages) lives in the SQLCipher `messenger.db` through `core::storage` (keyed open, typed `StorageError`, forward-only migrations; failures are latched, never reset or recreate the file). Never write it anywhere else. New tables are new migrations in `storage/schema.rs`, with SQL owned by the slice and `account_id` on every row; the only tables without it are `messages_fts` (FTS5 external-content index, reached only through a join on `messages.account_id`) and `legacy_imports` (install bookkeeping), both documented and allowlisted in `core/tests/integration/sql_namespacing_guard.rs`. The old plaintext `settings.json`, `contacts.json` and `known_peers.json` are only read once by `storage::legacy` and then removed.
+- `target/gate/` is owned by the pre-commit hook: its workspace-crate outputs are deleted after every run (`.githooks/gate-cleanup.sh`); `target/debug/` is never touched by the hook. `release/` holds git-ignored end-user binaries.
 - Contacts are the single trust store (`ContactBook` implements `discovery::KnownPeers`).
 
 ## Commands
@@ -41,15 +43,21 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo build                      # protocol, core, app only: the test-only `headless` is not a default member
 cd app && npm ci && npm test && npm run check && npm run build   # frontend
 docker/smoke.sh                  # Level-3 two-container smoke (needs Docker; not in the hook)
+npm run release                  # end-user binary -> release/ (+ .sha256), built in a temp target dir
+cargo clean                      # reclaim everything incl. target/gate (optional: cargo sweep --time 7 / --installed, never required)
 ```
 
 Do not use plain `cargo run` for the app: it shows "connection refused" because
 nothing serves the dev frontend. Use `npm start`.
 
+Manual `cargo test` output in `target/debug` is not auto-cleaned.
+
 Install the hook once per clone: `git config core.hooksPath .githooks`. It runs
-fmt, clippy (warnings are errors), workspace tests, `cargo build`, the secret
-gates below, and the frontend check/test/build. Never bypass it (`--no-verify`);
-fix the failure instead.
+in `target/gate` (no incremental, one run at a time), then fmt, clippy (warnings
+are errors), workspace tests, `cargo build`, a Linux check that `app` exports no
+`sqlite3_*`, the secret gates below, and the frontend check/test/build; it always
+runs `.githooks/gate-cleanup.sh` afterwards (size cap `P2PM_GATE_MAX_MIB`, default
+8192). Never bypass it (`--no-verify`); fix the failure instead.
 
 ## Conventions
 

@@ -39,4 +39,41 @@ fn pre_commit_hook_exists_is_executable_and_runs_all_gates() {
     for needle in required {
         assert!(script.contains(needle), "hook missing: {needle}");
     }
+
+    let gate_needles = [
+        "CARGO_TARGET_DIR=",
+        "target/gate",
+        "CARGO_INCREMENTAL=0",
+        "flock",
+        "trap cleanup EXIT",
+        "trap 'exit 130' INT",
+        "trap 'exit 143' TERM",
+        ".githooks/gate-cleanup.sh",
+        "rustc -vV",
+        "Cargo.lock",
+        "nm -D --defined-only",
+        "sqlite3_",
+    ];
+    for needle in gate_needles {
+        assert!(script.contains(needle), "hook missing: {needle}");
+    }
+    assert!(
+        script.find("flock 9").unwrap() < script.find("trap cleanup EXIT").unwrap(),
+        "trap must be installed after the lock is held"
+    );
+    assert!(
+        script.find("cargo build\n").unwrap() < script.find("nm -D --defined-only").unwrap(),
+        "symbol check must follow cargo build"
+    );
+
+    let cleanup = hook_path().with_file_name("gate-cleanup.sh");
+    let mode = std::fs::metadata(&cleanup)
+        .expect("gate-cleanup.sh must exist")
+        .permissions()
+        .mode();
+    assert!(mode & 0o111 != 0, "gate-cleanup.sh must be executable");
+    let body = std::fs::read_to_string(&cleanup).unwrap();
+    for needle in ["cargo", " clean ", "--target-dir", "refuse"] {
+        assert!(body.contains(needle), "gate-cleanup.sh missing: {needle}");
+    }
 }

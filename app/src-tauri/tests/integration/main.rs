@@ -2,5 +2,6 @@
 //! original file names, so filters stay stable.
 
 mod frontend_limits;
+mod gate_cleanup;
 mod no_test_backends;
 mod pre_commit_hook;
