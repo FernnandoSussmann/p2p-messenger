@@ -21,7 +21,7 @@ use super::keygen::{generate_db_key, generate_identity_key, node_id_from_secret_
 use super::{
     read_marker, ticket_to_qr_svg, validate_display_name, write_marker, AccountId, DbKey,
     DisplayName, DisplayNameError, KeychainError, KeychainStore, MarkerError, NodeId,
-    SecretKeyBytes, SettingsError, SettingsStore, Ticket, TicketError, TicketProvider,
+    SecretKeyBytes, SettingsError, SettingsStore, Theme, Ticket, TicketError, TicketProvider,
 };
 
 /// Why an existing identity could not be read. Recoverable by the user, so it
@@ -202,6 +202,34 @@ impl std::error::Error for SetNameError {
 }
 
 #[derive(Debug)]
+pub enum ThemeError {
+    /// No identity exists to attach the theme to.
+    NotProvisioned,
+    Marker(MarkerError),
+    Settings(SettingsError),
+}
+
+impl fmt::Display for ThemeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ThemeError::NotProvisioned => write!(f, "no identity has been provisioned"),
+            ThemeError::Marker(e) => write!(f, "account marker error: {e}"),
+            ThemeError::Settings(e) => write!(f, "settings error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ThemeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ThemeError::NotProvisioned => None,
+            ThemeError::Marker(e) => Some(e),
+            ThemeError::Settings(e) => Some(e),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum MyInfoError {
     Load(LoadError),
     Settings(SettingsError),
@@ -340,6 +368,26 @@ where
             .set_display_name(&account_id, &name)
             .map_err(SetNameError::Settings)?;
         Ok(name)
+    }
+
+    fn account_for_theme(&self) -> Result<AccountId, ThemeError> {
+        read_marker(&self.data_dir)
+            .map_err(ThemeError::Marker)?
+            .ok_or(ThemeError::NotProvisioned)
+    }
+
+    /// The account's theme; never chosen reads as Midnight.
+    pub fn theme(&self) -> Result<Theme, ThemeError> {
+        let id = self.account_for_theme()?;
+        let stored = self.settings.get_theme(&id).map_err(ThemeError::Settings)?;
+        Ok(stored.unwrap_or_default())
+    }
+
+    pub fn set_theme(&self, theme: Theme) -> Result<(), ThemeError> {
+        let id = self.account_for_theme()?;
+        self.settings
+            .set_theme(&id, theme)
+            .map_err(ThemeError::Settings)
     }
 
     /// Assembles My Info with a freshly requested ticket.
@@ -645,6 +693,28 @@ mod tests {
         assert!(matches!(
             service(&dir).set_display_name("Ada"),
             Err(SetNameError::NotProvisioned)
+        ));
+    }
+
+    #[test]
+    fn theme_defaults_to_midnight_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _) = provisioned(&dir);
+        assert_eq!(svc.theme().unwrap(), Theme::Midnight);
+        for t in [Theme::Light, Theme::Dark, Theme::Midnight] {
+            svc.set_theme(t).unwrap();
+            assert_eq!(svc.theme().unwrap(), t);
+        }
+    }
+
+    #[test]
+    fn theme_requires_an_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = service(&dir);
+        assert!(matches!(svc.theme(), Err(ThemeError::NotProvisioned)));
+        assert!(matches!(
+            svc.set_theme(Theme::Dark),
+            Err(ThemeError::NotProvisioned)
         ));
     }
 

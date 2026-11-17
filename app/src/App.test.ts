@@ -5,12 +5,15 @@ const status = vi.fn();
 const myInfo = vi.fn();
 const provision = vi.fn();
 const setName = vi.fn();
+const themeGet = vi.fn();
 vi.mock("./identity", () => ({
   identityStatus: () => status(),
   identityMyInfo: () => myInfo(),
   identityProvision: () => provision(),
   identitySetDisplayName: (n: string) => setName(n),
   describeError: () => "boom",
+  identityThemeGet: () => themeGet(),
+  identityThemeSet: vi.fn(),
 }));
 const storage = vi.fn();
 const storageRetry = vi.fn();
@@ -32,9 +35,10 @@ import App from "./App.svelte";
 
 describe("App view machine", () => {
   beforeEach(() => {
-    for (const m of [status, myInfo, provision, setName, storage, storageRetry]) m.mockReset();
+    for (const m of [status, myInfo, provision, setName, storage, storageRetry, themeGet]) m.mockReset();
     myInfo.mockResolvedValue(info("Ada"));
     storage.mockResolvedValue({ type: "Ready" });
+    themeGet.mockResolvedValue({ theme: "midnight" });
   });
   afterEach(cleanup);
 
@@ -48,6 +52,37 @@ describe("App view machine", () => {
     status.mockResolvedValue({ type: "Present", account_id: "a", node_id: "n" });
     render(App);
     await screen.findByRole("tab", { name: "My Info" });
+  });
+
+  it("applies the stored theme before showing main", async () => {
+    themeGet.mockResolvedValue({ theme: "light" });
+    status.mockResolvedValue({ type: "Present", account_id: "a", node_id: "n" });
+    render(App);
+    await screen.findByRole("tab", { name: "My Info" });
+    expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("loads the theme before the tab list appears", async () => {
+    status.mockResolvedValue({ type: "Present", account_id: "a", node_id: "n" });
+    render(App);
+    await screen.findByRole("tab", { name: "My Info" });
+    expect(themeGet).toHaveBeenCalledTimes(1);
+    expect(themeGet.mock.invocationCallOrder[0]).toBeLessThan(myInfo.mock.invocationCallOrder[0] ?? Infinity);
+  });
+
+  it("a rejected theme read still shows main with the midnight theme", async () => {
+    themeGet.mockRejectedValue({ type: "Internal" });
+    status.mockResolvedValue({ type: "Present", account_id: "a", node_id: "n" });
+    render(App);
+    await screen.findByRole("tab", { name: "My Info" });
+    expect(document.documentElement.dataset.theme).toBe("midnight");
+  });
+
+  it("never reads the theme when the identity is absent", async () => {
+    status.mockResolvedValue({ type: "Absent" });
+    render(App);
+    await screen.findByText("Welcome");
+    expect(themeGet).not.toHaveBeenCalled();
   });
 
   it("blocks on error with retry and never provisions", async () => {

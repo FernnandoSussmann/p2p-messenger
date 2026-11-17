@@ -402,7 +402,8 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 1. First launch shows the wizard; empty or whitespace names are rejected.
 2. A valid name lands on the main screen; relaunch skips the wizard.
 3. My Info shows name, full NodeId, ticket and QR; both copy buttons paste
-   exactly the ticket / NodeId.
+   exactly the ticket / NodeId. The theme (Midnight, Dark, Light) is chosen
+   there too, stored per account in `messenger.db`, and survives a relaunch.
 4. Denying keychain access shows the blocking error screen, never the wizard.
 5. My Info shows the long live ticket (not just `p2pm:<nodeid>`); it updates
    shortly after launch once the relay connects.

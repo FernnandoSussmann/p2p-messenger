@@ -94,12 +94,12 @@
 </script>
 
 <section aria-label="Conversation">
-  <header>
-    <button type="button" onclick={onBack}>Back</button>
+  <header class="row">
+    <button type="button" class="btn btn-secondary btn-sm" onclick={onBack}>Back</button>
     <strong><bdi>{contact?.nickname ?? nodeId.slice(0, 8)}</bdi></strong>
     {#if contact}<TrustBadge verified={contact.verified} />{/if}
-    <span data-testid="connection-text">{connected ? "Connected" : "Not connected"}</span>
-    <button type="button" disabled={clearing} onclick={() => ((clearing = true), (cleared = false))}>
+    <span class="muted" data-testid="connection-text">{connected ? "Connected" : "Not connected"}</span>
+    <button type="button" class="btn btn-danger btn-sm" disabled={clearing} onclick={() => ((clearing = true), (cleared = false))}>
       Clear history…
     </button>
   </header>
@@ -111,17 +111,18 @@
       onCancel={() => (clearing = false)}
     />
   {/if}
-  {#if cleared}<p role="status">History cleared.</p>{/if}
+  {#if cleared}<p role="status" class="alert alert-info">History cleared.</p>{/if}
   {#if !contact}
-    <p role="status">This contact was removed.</p>
+    <p role="status" class="alert alert-info">This contact was removed.</p>
   {:else if !connected}
-    <p role="status">
+    <p role="status" class="alert alert-info">
       Not connected. Messages wait as Pending and are sent automatically once you are connected
       again: when they connect to you, or when you use Contacts → Connect or paste their ticket in
       Network.
     </p>
   {/if}
   <input
+    class="input"
     type="search"
     aria-label="Search this conversation"
     placeholder="Search this conversation"
@@ -129,46 +130,28 @@
     oninput={search}
     onkeydown={searchKey}
   />
-  {#if searchError}<p role="alert">{searchError}</p>{/if}
+  {#if searchError}<p role="alert" class="alert alert-danger">{searchError}</p>{/if}
   {#if results !== null}
-    <ul aria-label="Search results" data-testid="search-results">
+    <ul class="list" aria-label="Search results" data-testid="search-results">
       {#each results as r (r.id)}
         <li>
           <span>{r.direction === "out" ? "You" : "Them"}</span>
           <time>{formatLocalTime(r.sent_at_ms)}</time>
-          <bdi dir="auto" class="result-body">{r.body}</bdi>
+          <bdi dir="auto" class="result-body wrap-anywhere">{r.body}</bdi>
         </li>
       {:else}
         <li>No matches.</li>
       {/each}
     </ul>
   {/if}
-  {#if conv?.error}<p role="alert">{conv.error}</p>{/if}
+  {#if conv?.error}<p role="alert" class="alert alert-danger">{conv.error}</p>{/if}
   {#if conv && conv.nextBefore !== null}
-    <button type="button" disabled={conv.loading} onclick={older}>Load older messages</button>
+    <button type="button" class="btn btn-secondary btn-sm" disabled={conv.loading} onclick={older}>Load older messages</button>
   {/if}
-  <ol role="log" aria-live="polite" bind:this={log} onscroll={onScroll}>
+  <ol class="chat-log" role="log" aria-live="polite" bind:this={log} onscroll={onScroll}>
     {#each messages as m (m.id)}
       <MessageBubble message={m} />
     {/each}
   </ol>
   <Composer disabled={!contact} onSend={sendMessage} />
 </section>
-
-<style>
-  header {
-    display: flex;
-    gap: 0.5em;
-    align-items: center;
-  }
-  ol {
-    padding: 0;
-    max-height: 50vh;
-    overflow-y: auto;
-  }
-  .result-body {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    unicode-bidi: isolate;
-  }
-</style>

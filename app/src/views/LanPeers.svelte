@@ -42,19 +42,19 @@
   }
 </script>
 
-<section>
+<section class="stack">
   <h3>On this network</h3>
-  <p>People nearby announcing themselves. Names are chosen by them and are not verified.</p>
+  <p class="muted">People nearby announcing themselves. Names are chosen by them and are not verified.</p>
   {#if others.length === 0}
-    <p>No one new on this network.</p>
+    <p class="muted">No one new on this network.</p>
   {:else}
-    <ul>
+    <ul class="list">
       {#each others as peer (peer.node_id)}
-        <li data-testid="lan-peer">
+        <li class="stack" data-testid="lan-peer">
           <TrustBadge verified={false} />
           {#if peer.display_name}calls themselves “<bdi data-testid="lan-peer-name">{peer.display_name}</bdi>”{:else}<span data-testid="lan-peer-name">(no name)</span>{/if}
           <NodeIdLine nodeId={peer.node_id} />
-          <button type="button" disabled={busy} onclick={() => open(peer.node_id)}>Add…</button>
+          <button type="button" class="btn btn-secondary btn-sm" disabled={busy} onclick={() => open(peer.node_id)}>Add…</button>
           {#if adding === peer.node_id}
             <NicknameForm
               selfName={peer.display_name}
@@ -68,5 +68,5 @@
       {/each}
     </ul>
   {/if}
-  {#if error}<p role="alert">{error}</p>{/if}
+  {#if error}<p role="alert" class="alert alert-danger">{error}</p>{/if}
 </section>

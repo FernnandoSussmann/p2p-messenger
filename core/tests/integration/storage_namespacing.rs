@@ -7,7 +7,7 @@ use std::sync::Arc;
 use core::contacts::{ContactStore, Nickname, SqlCipherContactStore, TrustState};
 use core::identity::{
     validate_display_name, AccountId, DbKey, KeychainError, NodeId, SettingsStore,
-    SqlCipherSettingsStore,
+    SqlCipherSettingsStore, Theme,
 };
 use core::messaging::{MessageStatus, MessageStore, SqlCipherMessageStore};
 use core::storage::{KeySource, Storage};
@@ -50,6 +50,7 @@ fn write_all(s: &Side, tag: &str) {
         .unwrap();
     s.settings.set_provisioned_at(&s.account, 5).unwrap();
     s.settings.set_presence(&s.account, false).unwrap();
+    s.settings.set_theme(&s.account, Theme::Dark).unwrap();
     s.settings
         .set_relay_url(&s.account, Some("https://relay.example"))
         .unwrap();
@@ -78,6 +79,7 @@ fn assert_sees_nothing(reader: &Side, writer_tag: &str) {
     assert_eq!(reader.settings.get_provisioned_at(id).unwrap(), None);
     assert_eq!(reader.settings.get_presence(id).unwrap(), None);
     assert_eq!(reader.settings.get_relay_url(id).unwrap(), None);
+    assert_eq!(reader.settings.get_theme(id).unwrap(), None);
     assert!(reader.contacts.list(id).unwrap().is_empty());
     assert!(reader.contacts.get(id, &peer(1)).unwrap().is_none());
     assert!(reader

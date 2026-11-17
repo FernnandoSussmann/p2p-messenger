@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { describeError, identityStatus } from "./identity";
   import { appView, wizardView as Wizard } from "./lib/router";
+  import { loadTheme } from "./lib/theme";
   import { storageStatus } from "./storage";
   import ErrorBlocking from "./views/ErrorBlocking.svelte";
   import MainScreen from "./views/MainScreen.svelte";
@@ -24,6 +25,7 @@
         if (storage.type === "Error") {
           appView.set({ kind: "storage", message: storage.reason });
         } else {
+          await loadTheme();
           appView.set({ kind: "main" });
         }
       }
@@ -35,7 +37,7 @@
   onMount(refresh);
 </script>
 
-<main>
+<main class="app-column">
   {#if $appView.kind === "loading"}
     <p>Loading...</p>
   {:else if $appView.kind === "blocked"}
@@ -48,10 +50,3 @@
     <MainScreen />
   {/if}
 </main>
-
-<style>
-  main {
-    font-family: sans-serif;
-    margin: 2rem;
-  }
-</style>

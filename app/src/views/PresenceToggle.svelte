@@ -33,14 +33,14 @@
   }
 </script>
 
-<div>
-  <label>
+<div class="stack">
+  <label class="switch" class:is-disabled={!loaded || busy}>
     <input type="checkbox" role="switch" checked={enabled} disabled={!loaded || busy} onchange={toggle} />
     Visible on this network
   </label>
-  <p>
+  <p class="muted">
     Off = other devices on this network won't see you in their list. You are <strong>not</strong> offline:
     anyone who already has your ticket can still connect, and you can still connect to others.
   </p>
-  {#if error}<p role="alert">{error}</p>{/if}
+  {#if error}<p role="alert" class="alert alert-danger">{error}</p>{/if}
 </div>

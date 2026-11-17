@@ -28,6 +28,7 @@
 </script>
 
 <form
+  class="stack"
   onsubmit={(e) => {
     e.preventDefault();
     if (trimmed && !busy) onSubmit(trimmed);
@@ -36,11 +37,13 @@
   <p data-testid="self-name-context">
     {#if selfName}They call themselves “<bdi data-testid="peer-name">{selfName}</bdi>” (chosen by them, not verified){:else}They did not send a name{/if}
   </p>
-  <label>
+  <label class="field">
     Your name for them
-    <input type="text" maxlength="256" bind:value />
+    <input class="input" type="text" maxlength="256" bind:value />
   </label>
-  {#if error}<p role="alert">{error}</p>{/if}
-  <button type="submit" disabled={!trimmed || busy}>{submitLabel}</button>
-  {#if onCancel}<button type="button" onclick={onCancel}>{cancelLabel}</button>{/if}
+  {#if error}<p role="alert" class="alert alert-danger">{error}</p>{/if}
+  <div class="row">
+    <button type="submit" class="btn btn-primary" disabled={!trimmed || busy}>{submitLabel}</button>
+    {#if onCancel}<button type="button" class="btn btn-secondary" onclick={onCancel}>{cancelLabel}</button>{/if}
+  </div>
 </form>

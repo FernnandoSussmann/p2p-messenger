@@ -53,24 +53,24 @@
   }
 </script>
 
-<section>
+<section class="stack">
   {#if step === "generate"}
     <h2>Welcome</h2>
     <p>Create your identity on this device.</p>
-    <button onclick={generate} disabled={busy}>Create identity</button>
+    <button class="btn btn-primary" onclick={generate} disabled={busy}>Create identity</button>
   {:else if step === "name"}
     <h2>Choose a display name</h2>
-    <form onsubmit={submitName}>
-      <label>
+    <form class="stack" onsubmit={submitName}>
+      <label class="field">
         Display name
-        <input type="text" bind:value={name} disabled={busy} />
+        <input class="input" type="text" bind:value={name} disabled={busy} />
       </label>
-      <button type="submit" disabled={busy}>Continue</button>
+      <button type="submit" class="btn btn-primary" disabled={busy}>Continue</button>
     </form>
   {:else}
     <h2>All set</h2>
   {/if}
   {#if error}
-    <p role="alert">{error}</p>
+    <p role="alert" class="alert alert-danger">{error}</p>
   {/if}
 </section>

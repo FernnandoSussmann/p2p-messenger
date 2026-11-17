@@ -2,8 +2,8 @@
   let { message, onRetry }: { message: string; onRetry: () => void } = $props();
 </script>
 
-<section role="alert">
+<section role="alert" class="alert alert-danger stack">
   <h2>Identity unavailable</h2>
   <p>{message}</p>
-  <button onclick={onRetry}>Retry</button>
+  <button class="btn btn-primary" onclick={onRetry}>Retry</button>
 </section>

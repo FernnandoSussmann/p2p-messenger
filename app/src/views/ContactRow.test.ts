@@ -46,7 +46,7 @@ beforeEach(() => {
 });
 
 describe("ContactRow", () => {
-  it("renders nickname bold with the NodeId small and gray beneath", () => {
+  it("renders the nickname in a strong element followed by the short NodeId", () => {
     show();
     const nick = screen.getByTestId("contact-nickname");
     expect(nick.tagName).toBe("STRONG");

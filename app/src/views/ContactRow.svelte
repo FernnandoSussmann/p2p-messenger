@@ -72,28 +72,28 @@
 
 <!-- Only the local nickname is shown here (user decision). contact.self_name is
      intentionally not rendered; it belongs to the future contact-info screen. -->
-<li data-testid="contact-row" class="row">
-  <div class="title">
+<li data-testid="contact-row" class="stack">
+  <div class="title row">
     <TrustBadge verified={contact.verified} />
-    <strong class="nickname" data-testid="contact-nickname"><bdi>{contact.nickname}</bdi></strong>
+    <strong class="nickname truncate" data-testid="contact-nickname"><bdi>{contact.nickname}</bdi></strong>
   </div>
   <NodeIdLine nodeId={contact.node_id} />
-  <div class="actions">
-    <button type="button" onclick={() => openChat(contact.node_id)}
+  <div class="row">
+    <button type="button" class="btn btn-primary btn-sm" onclick={() => openChat(contact.node_id)}
       >{($unread[contact.node_id] ?? 0) > 0 ? `Message (${$unread[contact.node_id]})` : "Message"}</button
     >
     {#if lanTicket && !isConnected}
-      <button type="button" disabled={busy} onclick={connect}>Connect</button>
+      <button type="button" class="btn btn-secondary btn-sm" disabled={busy} onclick={connect}>Connect</button>
     {/if}
-    <button type="button" onclick={() => { renameError = null; renaming = true; }}>Rename</button>
+    <button type="button" class="btn btn-secondary btn-sm" onclick={() => { renameError = null; renaming = true; }}>Rename</button>
     {#if contact.verified === true}
-      <button type="button" onclick={unverify}>Mark unverified</button>
+      <button type="button" class="btn btn-secondary btn-sm" onclick={unverify}>Mark unverified</button>
     {:else}
-      <button type="button" onclick={() => (verifying = true)}>Mark verified…</button>
+      <button type="button" class="btn btn-secondary btn-sm" onclick={() => (verifying = true)}>Mark verified…</button>
     {/if}
-    <button type="button" onclick={() => (removing = true)}>Remove…</button>
+    <button type="button" class="btn btn-danger btn-sm" onclick={() => (removing = true)}>Remove…</button>
   </div>
-  {#if error}<p role="alert">{error}</p>{/if}
+  {#if error}<p role="alert" class="alert alert-danger">{error}</p>{/if}
   {#if renaming}
     <NicknameForm
       initial={contact.nickname}
@@ -112,20 +112,3 @@
     <RemoveContactDialog {contact} onDone={removed} onCancel={() => (removing = false)} />
   {/if}
 </li>
-
-<style>
-  .row {
-    margin-bottom: 1em;
-  }
-  .title {
-    display: flex;
-    gap: 0.5em;
-    min-width: 0;
-  }
-  .nickname {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-</style>

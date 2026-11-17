@@ -30,7 +30,8 @@ use contacts_cmd::{
     contacts_set_verified, ContactsState,
 };
 use identity_cmd::{
-    identity_my_info, identity_provision, identity_set_display_name, identity_status, AppIdentity,
+    identity_my_info, identity_provision, identity_set_display_name, identity_status,
+    identity_theme_get, identity_theme_set, AppIdentity,
 };
 use net_cmd::{
     ensure_started, net_connect_ticket, net_lan_peers, net_my_ticket, net_pending_incoming,
@@ -112,6 +113,8 @@ pub fn run() {
             identity_provision,
             identity_set_display_name,
             identity_my_info,
+            identity_theme_get,
+            identity_theme_set,
             net_my_ticket,
             net_connect_ticket,
             net_respond_incoming,
