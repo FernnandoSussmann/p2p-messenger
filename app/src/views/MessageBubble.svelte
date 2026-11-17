@@ -29,46 +29,25 @@
   }
 </script>
 
-<li class={message.direction === "out" ? "own" : "peer"} data-testid="message">
-  <bdi dir="auto" class="body">{message.body}</bdi>
-  <div class="meta">
-    <time datetime={guardedIso(message.sent_at_ms)}>{formatLocalTime(message.sent_at_ms)}</time>
-    {#if message.direction === "out"}
+<li
+  class={["bubble", message.direction === "out" ? "own out" : "peer in", message.status === "failed" && message.direction === "out" && "failed"]}
+  data-testid="message"
+>
+  {#if message.direction === "out"}<span class="who">You</span>{/if}
+  <bdi dir="auto" class="body wrap-anywhere">{message.body}</bdi>
+  <div class="stamp">
+    <time datetime={guardedIso(message.sent_at_ms)} title={message.direction === "in" ? "Sent (their clock)" : undefined}>{formatLocalTime(message.sent_at_ms)}</time>
+    {#if message.direction === "in"}
+      {#if message.received_at_ms !== null && guardedIso(message.received_at_ms) !== undefined}
+        <span>|</span>
+        <time datetime={guardedIso(message.received_at_ms)} title="Received (this device)">{formatLocalTime(message.received_at_ms)}</time>
+      {/if}
+    {:else}
       <span class="status" data-status={message.status}>{labels[message.status] ?? ""}</span>
       {#if message.status === "failed"}
-        <button type="button" disabled={busy} onclick={resend}>Resend</button>
+        <button type="button" class="btn btn-ghost btn-sm" disabled={busy} onclick={resend}>Resend</button>
       {/if}
     {/if}
   </div>
-  {#if error}<p role="alert">{error}</p>{/if}
+  {#if error}<p role="alert" class="alert alert-danger">{error}</p>{/if}
 </li>
-
-<style>
-  li {
-    list-style: none;
-    max-width: 75%;
-    margin: 0.4em 0;
-    padding: 0.4em 0.7em;
-    border-radius: 0.6em;
-  }
-  .own {
-    margin-left: auto;
-    text-align: right;
-    background: #e3f0ff;
-  }
-  .peer {
-    margin-right: auto;
-    text-align: left;
-    background: #eee;
-  }
-  .body {
-    display: block;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    unicode-bidi: isolate;
-  }
-  .meta {
-    font-size: 0.75em;
-    color: #555;
-  }
-</style>

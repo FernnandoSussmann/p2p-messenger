@@ -42,7 +42,7 @@
 </script>
 
 {#if head}
-  <div role="dialog" aria-label="Name this contact" data-testid="naming-prompt">
+  <div class="dialog" role="dialog" aria-label="Name this contact" data-testid="naming-prompt">
     <p><TrustBadge verified={false} /> Connected. What do you want to call them?</p>
     <NodeIdLine nodeId={head.node_id} />
     {#key head.node_id}
@@ -57,6 +57,6 @@
         onCancel={() => dropNaming(head.node_id)}
       />
     {/key}
-    {#if more > 0}<p>+{more} more</p>{/if}
+    {#if more > 0}<p class="muted">+{more} more</p>{/if}
   </div>
 {/if}

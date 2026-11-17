@@ -98,4 +98,32 @@ describe("MessageBubble", () => {
     const { container } = show({ body });
     expect(container.querySelector(".body")!.textContent).toBe(body);
   });
+
+  it("outgoing_shows_you_incoming_does_not", () => {
+    const out = show({ direction: "out" });
+    expect(out.container.querySelector(".who")!.textContent).toBe("You");
+    out.unmount();
+    const inn = show({ direction: "in", status: "received" });
+    expect(inn.container.querySelector(".who")).toBeNull();
+  });
+
+  it("incoming_shows_sent_and_received_times", () => {
+    const { container } = show({ direction: "in", status: "received", received_at_ms: 1_700_000_060_000 });
+    const t = container.querySelectorAll("time");
+    expect(t).toHaveLength(2);
+    expect(t[0].getAttribute("title")).toBe("Sent (their clock)");
+    expect(t[1].getAttribute("title")).toBe("Received (this device)");
+    expect(t[1].textContent).toBe(formatLocalTime(1_700_000_060_000));
+    expect(t[1].getAttribute("datetime")).toBe("2023-11-14T22:14:20.000Z");
+    expect(container.querySelector(".stamp")?.textContent).toContain(" | ");
+    expect(container.querySelector(".stamp [aria-hidden]")).toBeNull();
+  });
+
+  it("incoming_without_valid_received_time_shows_only_sent", () => {
+    for (const received_at_ms of [null, 1e20]) {
+      const { container, unmount } = show({ direction: "in", status: "received", received_at_ms });
+      expect(container.querySelectorAll("time")).toHaveLength(1);
+      unmount();
+    }
+  });
 });

@@ -54,7 +54,7 @@ describe("LanPeers", () => {
     (contacts as any).set([{ node_id: "c1" }]);
     render(LanPeers);
     expect(screen.getAllByTestId("lan-peer")).toHaveLength(1);
-    expect(screen.getByText("Nina")).toBeInTheDocument();
+    expect(screen.getByTestId("lan-peer-name")).toHaveTextContent("Nina");
     expect(screen.queryByText("Carol")).toBeNull();
   });
 
@@ -87,18 +87,22 @@ describe("LanPeers", () => {
     expect(screen.getByTestId("lan-peer-name").textContent).toBe(evil);
   });
 
-  it("nickname field is not prefilled", async () => {
+  it("form is inline without an Add… button; Add is disabled until a nickname is typed", async () => {
     lanPeers.set([peer("n1", "Bob")]);
     render(LanPeers);
-    await fireEvent.click(screen.getByRole("button", { name: "Add…" }));
-    expect((screen.getByLabelText("Your name for them") as HTMLInputElement).value).toBe("");
-    expect(screen.getByRole("button", { name: "Add contact and connect" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Add…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    const field = screen.getByLabelText("Your name for them") as HTMLInputElement;
+    expect(field.value).toBe("");
+    const add = screen.getByRole("button", { name: "Add contact and connect" });
+    expect(add).toBeDisabled();
+    await fireEvent.input(field, { target: { value: "Bobby" } });
+    expect(add).toBeEnabled();
   });
 
   async function submit(nick: string) {
-    await fireEvent.click(screen.getAllByRole("button", { name: "Add…" })[1]);
-    await fireEvent.input(screen.getByLabelText("Your name for them"), { target: { value: nick } });
-    await fireEvent.click(screen.getByRole("button", { name: "Add contact and connect" }));
+    await fireEvent.input(screen.getAllByLabelText("Your name for them")[1], { target: { value: nick } });
+    await fireEvent.click(screen.getAllByRole("button", { name: "Add contact and connect" })[1]);
   }
 
   it("Add sends the typed nickname then dials the peer's ticket", async () => {

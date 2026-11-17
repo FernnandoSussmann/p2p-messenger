@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
+import { get } from "svelte/store";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/svelte";
 
 vi.mock("../chat", async (orig) => ({
@@ -7,16 +8,15 @@ vi.mock("../chat", async (orig) => ({
   chatHistory: vi.fn(),
   chatSend: vi.fn(),
   chatResend: vi.fn(),
-  historySearch: vi.fn(),
-  historyClear: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => vi.fn()) }));
 
 import Chat from "./Chat.svelte";
-import { chatHistory, historyClear, historySearch, type MessageDto } from "../chat";
+import { chatHistory, type MessageDto } from "../chat";
 import { contacts } from "../lib/contactsStore";
 import { connections } from "../lib/netStore";
 import { closeChat, openChat } from "../lib/chatStore";
+import { resetScreen, screen as screenStore, showChat } from "../lib/router";
 
 const ID = "a".repeat(64);
 const mk = (i: number, o: Partial<MessageDto> = {}): MessageDto => ({
@@ -38,6 +38,7 @@ afterEach(() => {
 });
 beforeEach(() => {
   vi.clearAllMocks();
+  resetScreen();
   contacts.set([contact]);
   connections.set({ [ID]: { node_id: ID, state: "connected", direction: "outbound" } as never });
 });
@@ -49,6 +50,7 @@ describe("Chat", () => {
     expect(items.map((i) => i.querySelector(".body")!.textContent)).toEqual(["body 1", "body 2", "body 3"]);
     expect(screen.getByRole("log")).toBeTruthy();
     expect(screen.getByText("Connected")).toBeTruthy();
+    expect(screen.getByText("Bob").closest(".conv-header")).not.toBeNull();
     expect(screen.getByTestId("badge-unverified")).toBeTruthy();
   });
 
@@ -65,61 +67,38 @@ describe("Chat", () => {
     connections.set({});
     await show([]);
     expect(screen.getByText("Not connected")).toBeTruthy();
-    expect(screen.getByRole("status").textContent?.replace(/\s+/g, " ")).toContain("sent automatically once you are connected again");
+    expect(screen.getByRole("status").textContent?.replace(/\s+/g, " ")).toContain("Connect in their contact info or paste their ticket in Network.");
   });
 
-  it("removed_contact_disables_composer", async () => {
+  it("removed_contact_renders_nothing_and_goes_to_contacts", async () => {
+    showChat(ID);
+    await show([]);
     contacts.set([]);
-    await show([]);
-    expect(screen.getByRole("status").textContent).toBe("This contact was removed.");
-    expect(screen.getByLabelText("Message")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    await waitFor(() => expect(get(screenStore)).toEqual({ kind: "tab", tab: "contacts" }));
+    expect(screen.queryByRole("region", { name: "Conversation" })).toBeNull();
+    expect(screen.queryByText("This contact was removed.")).toBeNull();
+    expect(screen.queryByLabelText("Message")).toBeNull();
   });
 
-  it("search_shows_results_as_text", async () => {
+  it("contact_removed_while_open_goes_to_contacts", async () => {
+    showChat(ID);
     await show([]);
-    const hit = mk(9, { body: "<b>needle</b>" });
-    vi.mocked(historySearch).mockResolvedValue([hit]);
-    const box = screen.getByLabelText("Search this conversation");
-    await fireEvent.input(box, { target: { value: "needle" } });
-    const list = await screen.findByTestId("search-results");
-    expect(historySearch).toHaveBeenCalledWith("needle", ID);
-    expect(list.querySelector("b")).toBeNull();
-    expect(list.textContent).toContain("<b>needle</b>");
-    await fireEvent.keyDown(box, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByTestId("search-results")).toBeNull());
-    expect((box as HTMLInputElement).value).toBe("");
+    expect(get(screenStore).kind).toBe("chat");
+    contacts.set([{ ...contact, node_id: "b".repeat(64) }]);
+    await waitFor(() => expect(get(screenStore)).toEqual({ kind: "tab", tab: "contacts" }));
+  });
+
+  it("header_has_contact_info_button", async () => {
+    await show([]);
+    await fireEvent.click(screen.getByRole("button", { name: "Contact info" }));
+    expect(get(screenStore)).toEqual({ kind: "contact-info", nodeId: ID });
+    expect(screen.queryByLabelText("Search this conversation")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clear history…" })).toBeNull();
   });
 
   it("back_calls_onBack", async () => {
     await show([]);
     await fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(onBack).toHaveBeenCalled();
-  });
-
-  for (const [label, known] of [["contacts", true], ["removed contacts", false]] as const) {
-    it(`clear_history_is_reachable_for_${label.replace(" ", "_")}`, async () => {
-      if (!known) contacts.set([]);
-      await show([mk(1)]);
-      expect(screen.getByRole("button", { name: "Clear history…" })).toBeEnabled();
-    });
-  }
-
-  it("clear_history_empties_log_and_search", async () => {
-    vi.mocked(historyClear).mockResolvedValue(undefined);
-    await show([mk(1), mk(2)]);
-    vi.mocked(historySearch).mockResolvedValue([mk(1)]);
-    await fireEvent.input(screen.getByLabelText("Search this conversation"), { target: { value: "body" } });
-    await screen.findByTestId("search-results");
-    const open = screen.getByRole("button", { name: "Clear history…" });
-    await fireEvent.click(open);
-    expect(open).toBeDisabled();
-    expect(screen.getByRole("dialog", { name: "Clear history" }).textContent).toContain("Bob");
-    await fireEvent.click(screen.getByRole("button", { name: "Clear history" }));
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("History cleared."));
-    expect(historyClear).toHaveBeenCalledWith(ID);
-    expect(screen.queryAllByTestId("message")).toHaveLength(0);
-    expect(screen.queryByTestId("search-results")).toBeNull();
-    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

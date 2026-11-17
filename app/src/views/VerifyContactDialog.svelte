@@ -28,7 +28,7 @@
   }
 </script>
 
-<div role="dialog" aria-label="Mark contact as verified">
+<div class="dialog" role="dialog" aria-label="Mark contact as verified">
   <p><strong>Mark “<bdi>{contact.nickname}</bdi>” as verified?</strong></p>
   <p>
     Only do this if you have confirmed, through a channel you trust (for example in person, or a
@@ -39,14 +39,9 @@
     This is your own statement. The app does not check it cryptographically and cannot tell if you
     were given the wrong ticket. You can undo it at any time.
   </p>
-  {#if error}<p role="alert">{error}</p>{/if}
-  <button type="button" disabled={busy} onclick={confirm}>Yes, I checked — mark verified</button>
-  <button type="button" onclick={onCancel}>Cancel</button>
+  {#if error}<p role="alert" class="alert alert-danger">{error}</p>{/if}
+  <div class="dialog-foot">
+    <button type="button" class="btn btn-secondary" onclick={onCancel}>Cancel</button>
+    <button type="button" class="btn btn-primary" disabled={busy} onclick={confirm}>Yes, I checked — mark verified</button>
+  </div>
 </div>
-
-<style>
-  .selectable {
-    user-select: all;
-    word-break: break-all;
-  }
-</style>

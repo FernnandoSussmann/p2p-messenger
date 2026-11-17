@@ -6,6 +6,7 @@ import type { ConnectionStateDto } from "../net";
 export const contacts = writable<ContactDto[]>([]);
 export const contactIds = derived(contacts, (c) => new Set(c.map((x) => x.node_id)));
 export const contactsError = writable<string | null>(null);
+export const contactsNotice = writable<string | null>(null);
 
 export async function refreshContacts(): Promise<void> {
   try {

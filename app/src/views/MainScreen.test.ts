@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
+import { get } from "svelte/store";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/svelte";
 
 const unlisten = vi.fn();
@@ -36,6 +37,7 @@ vi.mock("../lib/contactsStore", async () => {
   return {
     contacts: writable([]),
     contactsError: writable(null),
+    contactsNotice: writable<string | null>(null),
     namingQueue,
     dropNaming: vi.fn(),
     refreshContacts: vi.fn(async () => {}),
@@ -46,24 +48,23 @@ const unlistenChat = vi.fn();
 vi.mock("../lib/chatStore", async () => {
   const { writable } = await import("svelte/store");
   return {
-    activeChat: writable<string | null>(null),
-    closeChat: vi.fn(),
     startChatEvents: vi.fn(async () => unlistenChat),
     conversation: writable(null),
     unread: writable({}),
     openChat: vi.fn(),
     loadOlder: vi.fn(),
     sendMessage: vi.fn(),
+    resetConversation: vi.fn(),
     resendMessage: vi.fn(),
   };
 });
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 
 import MainScreen from "./MainScreen.svelte";
-import { activeTab } from "../lib/router";
+import { screen as routerScreen, showChat, showContactInfo, showTab } from "../lib/router";
 import { incomingRequests, connections } from "../lib/netStore";
-import { startContacts } from "../lib/contactsStore";
-import { activeChat, closeChat, startChatEvents } from "../lib/chatStore";
+import { contacts, startContacts } from "../lib/contactsStore";
+import { startChatEvents } from "../lib/chatStore";
 import { identityMyInfo } from "../identity";
 import { netMyTicket, netPendingIncoming } from "../net";
 
@@ -72,9 +73,8 @@ beforeEach(() => {
   unlisten.mockClear();
   unlistenContacts.mockClear();
   unlistenChat.mockClear();
-  vi.mocked(closeChat).mockClear();
-  activeChat.set(null);
-  activeTab.set("contacts");
+  showTab("contacts");
+  contacts.set([{ node_id: "peer-1", nickname: "Pat", self_name: null, verified: false, added_at_ms: 0, last_seen_ms: null }]);
   namingQueue.set([]);
   incomingRequests.set([]);
   connections.set({});
@@ -92,9 +92,57 @@ describe("MainScreen", () => {
   it("Contacts is the first and default tab", () => {
     render(MainScreen);
     const tabs = screen.getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["Contacts", "My Info", "Network"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["Contacts", "Discover", "Network", "My Info"]);
     expect(tabs[0].getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("heading", { name: "Contacts" })).toBeTruthy();
+  });
+
+  it("tabs use roving tabindex and aria-controls", () => {
+    render(MainScreen);
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((t) => t.getAttribute("tabindex"))).toEqual(["0", "-1", "-1", "-1"]);
+    for (const t of tabs) {
+      const panelId = t.getAttribute("aria-controls")!;
+      if (t.getAttribute("aria-selected") === "true") {
+        expect(screen.getByRole("tabpanel").id).toBe(panelId);
+      }
+    }
+  });
+
+  it("footer p2p-messenger is on every tab", async () => {
+    render(MainScreen);
+    for (const name of ["Contacts", "Discover", "Network", "My Info"]) {
+      await fireEvent.click(screen.getByRole("tab", { name }));
+      expect(screen.getByText("p2p-messenger").tagName).toBe("FOOTER");
+    }
+  });
+
+  it("arrow keys wrap, select and keep focus on the tab", async () => {
+    render(MainScreen);
+    const first = screen.getByRole("tab", { name: "Contacts" });
+    first.focus();
+    await fireEvent.keyDown(first, { key: "ArrowLeft" });
+    const last = screen.getByRole("tab", { name: "My Info" });
+    await waitFor(() => expect(last.getAttribute("aria-selected")).toBe("true"));
+    await waitFor(() => expect(document.activeElement).toBe(last));
+    await fireEvent.keyDown(last, { key: "ArrowRight" });
+    const home = screen.getByRole("tab", { name: "Contacts" });
+    await waitFor(() => expect(document.activeElement).toBe(home));
+    expect(home.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("clicking a tab moves focus to the hidden heading marked data-screen-focus", async () => {
+    render(MainScreen);
+    for (const name of ["Discover", "Network", "My Info", "Contacts"]) {
+      await fireEvent.click(screen.getByRole("tab", { name }));
+      const marked = (await screen.findByRole("heading", { name, hidden: true })) as HTMLElement;
+      expect(marked.hasAttribute("data-screen-focus")).toBe(true);
+      expect(marked.tagName).toBe("H2");
+      expect(marked.textContent).toBe(name);
+      expect(marked.classList.contains("visually-hidden")).toBe(true);
+      expect(marked.getAttribute("tabindex")).toBe("-1");
+      await waitFor(() => expect(document.activeElement).toBe(marked));
+    }
   });
 
   it("starts and stops the contacts listener", async () => {
@@ -115,22 +163,30 @@ describe("MainScreen", () => {
     expect(screen.queryByLabelText("Connect by ticket")).toBeNull();
   });
 
-  it("shows a seeded prompt on both tabs", async () => {
+  it("shows a seeded prompt on every tab and on the chat screen", async () => {
     vi.mocked(netPendingIncoming).mockResolvedValue([{ node_id: "peer-1", display_name: "Eve", suggested_nickname: "Eve" }]);
     render(MainScreen);
     expect(await screen.findByRole("button", { name: /Accept/ })).toBeTruthy();
-    await fireEvent.click(screen.getByRole("tab", { name: "Network" }));
+    for (const name of ["Discover", "Network", "My Info", "Contacts"]) {
+      await fireEvent.click(screen.getByRole("tab", { name }));
+      expect(screen.getByRole("button", { name: /Accept/ })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
+    }
+    showChat("peer-1");
+    await screen.findByRole("button", { name: "Back" });
     expect(screen.getByRole("button", { name: /Accept/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
   });
 
   it("naming prompt is shown on every tab", async () => {
     namingQueue.set([{ node_id: "peer-9", self_name: "Eve", nickname: "Eve" }]);
     render(MainScreen);
     expect(await screen.findByTestId("naming-prompt")).toBeTruthy();
-    await fireEvent.click(screen.getByRole("tab", { name: "Network" }));
-    expect(screen.getByTestId("naming-prompt")).toBeTruthy();
-    await fireEvent.click(screen.getByRole("tab", { name: "My Info" }));
+    for (const name of ["Discover", "Network", "My Info", "Contacts"]) {
+      await fireEvent.click(screen.getByRole("tab", { name }));
+      expect(screen.getByTestId("naming-prompt")).toBeTruthy();
+    }
+    showChat("peer-1");
+    await screen.findByRole("button", { name: "Back" });
     expect(screen.getByTestId("naming-prompt")).toBeTruthy();
   });
 
@@ -141,19 +197,33 @@ describe("MainScreen", () => {
     await waitFor(() => expect(unlisten.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
 
-  it("active_chat_replaces_tab_panel", async () => {
-    activeChat.set("peer-1");
+  it("chat_screen_replaces_menu_and_footer_but_keeps_prompts", async () => {
+    namingQueue.set([{ node_id: "peer-9", self_name: "Eve", nickname: "Eve" }]);
     render(MainScreen);
-    expect(await screen.findByRole("button", { name: "Back" })).toBeTruthy();
+    showChat("peer-1");
+    const back = await screen.findByRole("button", { name: "Back" });
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByText("p2p-messenger")).toBeNull();
     expect(screen.queryByRole("heading", { name: "Contacts" })).toBeNull();
-    await fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(closeChat).toHaveBeenCalled();
+    expect(screen.getByTestId("naming-prompt")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(back));
+    await fireEvent.click(back);
+    expect(get(routerScreen)).toEqual({ kind: "tab", tab: "contacts" });
+    expect(await screen.findByRole("tablist")).toBeTruthy();
   });
 
-  it("tab_click_closes_chat", async () => {
+  it("contact_info_screen_replaces_menu_and_footer_but_keeps_prompts", async () => {
+    namingQueue.set([{ node_id: "peer-9", self_name: "Eve", nickname: "Eve" }]);
+    contacts.set([{ node_id: "peer-1", nickname: "Bob", self_name: null, verified: false, added_at_ms: 0, last_seen_ms: null }]);
     render(MainScreen);
-    await fireEvent.click(screen.getByRole("tab", { name: "Network" }));
-    expect(closeChat).toHaveBeenCalled();
+    showContactInfo("peer-1");
+    const back = await screen.findByRole("button", { name: "Back" });
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByText("p2p-messenger")).toBeNull();
+    expect(screen.getByTestId("naming-prompt")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(back));
+    await fireEvent.click(back);
+    expect(get(routerScreen)).toEqual({ kind: "chat", nodeId: "peer-1" });
   });
 
   it("chat_events_started_and_unlistened", async () => {

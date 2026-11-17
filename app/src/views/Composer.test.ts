@@ -60,4 +60,12 @@ describe("Composer", () => {
     await waitFor(() => expect(box().value).toBe(""));
     expect(send()).toBeDisabled();
   });
+
+  it("is_slim_with_placeholder_and_auto_grows", async () => {
+    expect(box().rows).toBe(1);
+    expect(box().placeholder).toBe("Type anything…");
+    await type("hi");
+    expect(box().style.height).not.toBe("");
+    expect(box().getAttribute("style")).toMatch(/^height:[^;]*;?$/);
+  });
 });

@@ -5,8 +5,8 @@ import { nicknameMessages } from "./lib/nicknameMessages";
 export interface ContactDto {
   node_id: string;
   nickname: string;
-  /** Not rendered in the contact list (user decision). For the naming prompt
-   *  and a future contact-info screen. */
+  /** Not rendered in the contact list (user decision). Used by the naming
+   *  prompt and shown on the contact-info screen only. */
   self_name: string | null;
   verified: boolean;
   added_at_ms: number;

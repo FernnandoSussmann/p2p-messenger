@@ -244,6 +244,45 @@ fn forward_migration_keeps_rows() {
 }
 
 #[test]
+fn theme_migration_upgrades_v4_database() {
+    use crate::identity::{
+        IdentityService, NodeIdTicketProvider, SettingsStore, SqlCipherSettingsStore, Theme,
+    };
+    let (dir, keychain, account, k) = installed();
+    let db = open_with(&dir, &k, &MIGRATIONS[..4]).unwrap();
+    assert_eq!(user_version(&db), 4);
+    db.conn()
+        .unwrap()
+        .execute(
+            "INSERT INTO account_settings (account_id, display_name) VALUES (?1, 'Ada')",
+            rusqlite::params![account.as_uuid().as_bytes().as_slice()],
+        )
+        .unwrap();
+    drop(db);
+
+    let db = open(&dir, &k);
+    assert_eq!(user_version(&db), 5);
+    let theme: Option<String> = db
+        .conn()
+        .unwrap()
+        .query_row("SELECT theme FROM account_settings", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(theme, None);
+    drop(db);
+
+    let storage = Arc::new(Storage::new(dir.path(), keychain.clone()));
+    let store = SqlCipherSettingsStore::new(storage.clone());
+    assert_eq!(store.get_theme(&account).unwrap(), None);
+    let service = IdentityService::new(
+        keychain,
+        SqlCipherSettingsStore::new(storage),
+        NodeIdTicketProvider,
+        dir.path(),
+    );
+    assert_eq!(service.theme().unwrap(), Theme::Midnight);
+}
+
+#[test]
 fn failing_migration_rolls_back_and_keeps_version() {
     let dir = tempfile::tempdir().unwrap();
     let k = key();

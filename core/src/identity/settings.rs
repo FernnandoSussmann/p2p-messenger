@@ -21,7 +21,7 @@ use iroh::RelayUrl;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::{validate_display_name, AccountId, DisplayName, DisplayNameError};
+use super::{validate_display_name, AccountId, DisplayName, DisplayNameError, Theme};
 use crate::storage::LegacyError;
 
 #[derive(Debug)]
@@ -52,6 +52,9 @@ pub trait SettingsStore {
     /// Validates with [`validate_relay_url`] and stores the canonical form;
     /// `None` clears the override.
     fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError>;
+    /// `None` means the user never chose, which is Midnight.
+    fn get_theme(&self, id: &AccountId) -> Result<Option<Theme>, SettingsError>;
+    fn set_theme(&self, id: &AccountId, theme: Theme) -> Result<(), SettingsError>;
     /// Called best-effort when provisioning rolls back, so a store that
     /// created durable state for `id` can drop it. Never deletes anything
     /// that did not belong to the failed attempt.
@@ -115,6 +118,12 @@ impl<T: SettingsStore + ?Sized> SettingsStore for std::sync::Arc<T> {
     fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError> {
         (**self).set_relay_url(id, url)
     }
+    fn get_theme(&self, id: &AccountId) -> Result<Option<Theme>, SettingsError> {
+        (**self).get_theme(id)
+    }
+    fn set_theme(&self, id: &AccountId, theme: Theme) -> Result<(), SettingsError> {
+        (**self).set_theme(id, theme)
+    }
     fn discard_new_account(&self, id: &AccountId) -> Result<(), SettingsError> {
         (**self).discard_new_account(id)
     }
@@ -126,6 +135,7 @@ struct AccountSettings {
     provisioned_at: Option<i64>,
     presence_enabled: Option<bool>,
     relay_url: Option<String>,
+    theme: Option<Theme>,
 }
 
 #[derive(Default)]
@@ -183,6 +193,14 @@ impl SettingsStore for MemorySettingsStore {
     fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError> {
         let canonical = url.map(validate_relay_url).transpose()?;
         self.with_account(id, |s| s.relay_url = canonical)
+    }
+
+    fn get_theme(&self, id: &AccountId) -> Result<Option<Theme>, SettingsError> {
+        self.with_account(id, |s| s.theme)
+    }
+
+    fn set_theme(&self, id: &AccountId, theme: Theme) -> Result<(), SettingsError> {
+        self.with_account(id, |s| s.theme = Some(theme))
     }
 }
 

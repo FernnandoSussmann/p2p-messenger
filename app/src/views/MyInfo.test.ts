@@ -6,14 +6,16 @@ vi.mock("../identity", async (orig) => ({
   ...(await orig<typeof import("../identity")>()),
   identityMyInfo: vi.fn(),
   identitySetDisplayName: vi.fn(),
+  identityThemeSet: vi.fn(),
 }));
 vi.mock("../net", () => ({ netMyTicket: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 
 import MyInfo from "./MyInfo.svelte";
-import { identityMyInfo, identitySetDisplayName } from "../identity";
+import { identityMyInfo, identitySetDisplayName, identityThemeSet } from "../identity";
 import { netMyTicket } from "../net";
+import { applyTheme } from "../lib/theme";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
@@ -28,12 +30,40 @@ afterEach(cleanup);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  applyTheme("midnight");
   vi.mocked(identityMyInfo).mockResolvedValue({ ...dto });
   vi.mocked(netMyTicket).mockResolvedValue({ ticket: dto.ticket, qr_svg: dto.qr_svg });
   vi.mocked(listen).mockResolvedValue(() => {});
 });
 
 describe("MyInfo", () => {
+  it("has a visually hidden heading and the sections in order", async () => {
+    render(MyInfo);
+    await screen.findByTestId("ticket");
+    expect(screen.getByRole("heading", { level: 2, name: "My Info" })).toHaveClass("visually-hidden");
+    const els = [
+      screen.getByRole("radiogroup", { name: "Theme" }),
+      screen.getByLabelText("Display name"),
+      screen.getByRole("heading", { name: "Connection ticket" }),
+      screen.getByRole("heading", { name: "NodeId" }),
+    ];
+    for (let i = 1; i < els.length; i++) {
+      expect(els[i - 1].compareDocumentPosition(els[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(screen.getByTestId("node-id")).toHaveClass("node-id");
+    expect(screen.getAllByRole("separator")).toHaveLength(2);
+  });
+
+  it("reports copy results in one status line", async () => {
+    render(MyInfo);
+    await fireEvent.click(await screen.findByRole("button", { name: "Copy ticket" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Ticket copied");
+    vi.mocked(writeText).mockRejectedValueOnce(new Error("x"));
+    await fireEvent.click(screen.getByRole("button", { name: "Copy NodeId" }));
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.getByRole("status")).toHaveTextContent("Copy failed");
+  });
+
   it("renders name, NodeId, ticket and QR", async () => {
     render(MyInfo);
     expect(await screen.findByTestId("display-name")).toHaveTextContent("Alice");
@@ -119,5 +149,28 @@ describe("MyInfo", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(identitySetDisplayName).toHaveBeenCalledWith("Bob"));
     await waitFor(() => expect(identityMyInfo).toHaveBeenCalledTimes(2));
+  });
+
+  it("saves the chosen theme and applies it", async () => {
+    vi.mocked(identityThemeSet).mockResolvedValue({ theme: "dark" });
+    render(MyInfo);
+    await fireEvent.click(await screen.findByRole("radio", { name: "Dark" }));
+    await waitFor(() => expect(identityThemeSet).toHaveBeenCalledWith("dark"));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  it("reverts and shows an alert when saving the theme fails", async () => {
+    vi.mocked(identityThemeSet).mockRejectedValue({ type: "Internal" });
+    render(MyInfo);
+    await fireEvent.click(await screen.findByRole("radio", { name: "Light" }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(document.documentElement.dataset.theme).toBe("midnight");
+  });
+
+  it("keeps the picker when My Info fails to load", async () => {
+    vi.mocked(identityMyInfo).mockRejectedValue({ type: "Internal" });
+    render(MyInfo);
+    await screen.findByRole("alert");
+    expect(screen.getByRole("radiogroup", { name: "Theme" })).toBeTruthy();
   });
 });

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { displayNameMessages } from "./lib/displayNameMessages";
+import type { Theme } from "./lib/theme";
 
 export type StatusDto =
   | { type: "Present"; account_id: string; node_id: string }
@@ -30,6 +31,7 @@ export type IdentityCmdError =
   | { type: "RecoverableErrorState"; reason: string }
   | { type: "KeychainAccessDenied" }
   | { type: "InvalidDisplayName"; kind: DisplayNameKind }
+  | { type: "InvalidTheme" }
   | { type: "Internal" };
 
 export const identityStatus = () => invoke<StatusDto>("identity_status");
@@ -38,6 +40,15 @@ export const identityProvision = () => invoke<ProvisionDto>("identity_provision"
 
 export const identitySetDisplayName = (name: string) =>
   invoke<void>("identity_set_display_name", { name });
+
+export interface ThemeDto {
+  theme: Theme;
+}
+
+export const identityThemeGet = () => invoke<ThemeDto>("identity_theme_get");
+
+export const identityThemeSet = (theme: Theme) =>
+  invoke<ThemeDto>("identity_theme_set", { theme });
 
 export const identityMyInfo = () => invoke<MyInfoDto>("identity_my_info");
 
