@@ -21,7 +21,7 @@ import { resetScreen, screen as screenStore, showChat } from "../lib/router";
 const ID = "a".repeat(64);
 const mk = (i: number, o: Partial<MessageDto> = {}): MessageDto => ({
   node_id: ID, id: `m${i}`, seq: i, cursor: `c${i}`, direction: "in", body: `body ${i}`,
-  sent_at_ms: 1_700_000_000_000 + i * 1000, received_at_ms: null, status: "received", ...o,
+  sent_at_ms: 1_700_000_000_000 + i * 1000, received_at_ms: null, delivered_at_ms: null, status: "received", ...o,
 });
 const contact = { node_id: ID, nickname: "Bob", self_name: null, verified: false, added_at_ms: 0, last_seen_ms: null };
 const onBack = vi.fn();

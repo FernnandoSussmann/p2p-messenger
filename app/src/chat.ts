@@ -11,6 +11,8 @@ export interface MessageDto {
   body: string;
   sent_at_ms: number;
   received_at_ms: number | null;
+  /** This device's clock when the peer's ack arrived; null if not delivered or delivered before DD-08. */
+  delivered_at_ms: number | null;
   status: MessageStatus;
 }
 
@@ -18,6 +20,7 @@ export interface MessageStatusDto {
   node_id: string;
   id: string;
   status: MessageStatus;
+  delivered_at_ms: number | null;
 }
 
 export interface HistoryPageDto {

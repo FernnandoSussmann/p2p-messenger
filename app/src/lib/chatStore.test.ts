@@ -28,7 +28,7 @@ const mk = (o: Partial<MessageDto> = {}): MessageDto => {
   n++;
   return {
     node_id: A, id: `id${n}`, seq: n, cursor: `c${n}`, direction: "in", body: `m${n}`,
-    sent_at_ms: 1000 + n, received_at_ms: 1000 + n, status: "received", ...o,
+    sent_at_ms: 1000 + n, received_at_ms: 1000 + n, delivered_at_ms: null, status: "received", ...o,
   };
 };
 const ids = () => get(conversation)!.messages.map((m) => m.id);
@@ -98,7 +98,7 @@ describe("chatStore", () => {
   });
 
   it("status_event_updates_message", async () => {
-    const x = mk({ direction: "out", status: "sending" });
+    const x = mk({ direction: "out", status: "sending", delivered_at_ms: null });
     page([x]);
     await openChat(A);
     emit("message_status", { node_id: A, id: x.id, status: "pending" });
@@ -110,7 +110,7 @@ describe("chatStore", () => {
   it("status_event_before_send_reply_is_applied", async () => {
     page([]);
     await openChat(A);
-    const sent = mk({ direction: "out", status: "sending" });
+    const sent = mk({ direction: "out", status: "sending", delivered_at_ms: null });
     let resolve!: (m: MessageDto) => void;
     vi.mocked(chatSend).mockReturnValueOnce(new Promise((r) => (resolve = r)));
     const p = sendMessage("hi");
@@ -121,7 +121,7 @@ describe("chatStore", () => {
   });
 
   it("page_load_never_downgrades_delivered", async () => {
-    const x = mk({ direction: "out", status: "sending" });
+    const x = mk({ direction: "out", status: "sending", delivered_at_ms: null });
     page([x]);
     await openChat(A);
     emit("message_status", { node_id: A, id: x.id, status: "delivered" });
@@ -203,7 +203,7 @@ describe("chatStore", () => {
     const x = mk({ direction: "out", status: "failed" });
     page([x]);
     await openChat(A);
-    vi.mocked(chatResend).mockResolvedValue({ node_id: A, id: x.id, status: "sending" });
+    vi.mocked(chatResend).mockResolvedValue({ node_id: A, id: x.id, status: "sending", delivered_at_ms: null });
     await resendMessage(x.id);
     expect(chatResend).toHaveBeenCalledWith(A, x.id);
     expect(status(x.id)).toBe("sending");
