@@ -14,5 +14,7 @@ pub enum ChatEvent {
         peer: NodeId,
         id: MessageId,
         status: MessageStatus,
+        /// `Some` only when this transition made the row Delivered.
+        delivered_at_ms: Option<i64>,
     },
 }

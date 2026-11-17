@@ -261,7 +261,7 @@ fn theme_migration_upgrades_v4_database() {
     drop(db);
 
     let db = open(&dir, &k);
-    assert_eq!(user_version(&db), 5);
+    assert_eq!(user_version(&db), SCHEMA_VERSION);
     let theme: Option<String> = db
         .conn()
         .unwrap()

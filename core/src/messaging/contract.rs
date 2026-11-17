@@ -67,6 +67,7 @@ fn insert_round_trips_every_field(store: &dyn MessageStore) {
         assert_eq!(sent.direction, MessageDirection::Outgoing);
         assert_eq!(sent.status, MessageStatus::Pending);
         assert_eq!(sent.received_at_ms, None);
+        assert_eq!(sent.delivered_at_ms, None);
         assert_eq!(
             (sent.sent_at_ms, sent.body.as_str(), sent.peer),
             (at, body, p)
@@ -77,6 +78,7 @@ fn insert_round_trips_every_field(store: &dyn MessageStore) {
     assert_eq!(got.direction, MessageDirection::Incoming);
     assert_eq!(got.status, MessageStatus::Received);
     assert_eq!(got.received_at_ms, Some(5));
+    assert_eq!(got.delivered_at_ms, None);
     assert_eq!(store.get(&a, &p, &got.id).unwrap(), Some(got));
     assert_eq!(store.get(&a, &p, &new_message_id()).unwrap(), None);
 }
@@ -125,7 +127,11 @@ fn status_lifecycle(store: &dyn MessageStore) {
     let status = || store.get(&a, &p, &row.id).unwrap().unwrap().status;
     assert!(set(MessageStatus::Pending));
     assert_eq!(status(), MessageStatus::Pending);
-    assert!(set(MessageStatus::Delivered));
+    assert_eq!(
+        store.set_status(&a, &p, &row.id, MessageStatus::Delivered),
+        Err(MessageStoreError::InvalidQuery)
+    );
+    assert!(store.mark_delivered(&a, &p, &row.id, 10).unwrap());
     assert!(!set(MessageStatus::Failed));
     assert_eq!(status(), MessageStatus::Delivered);
     assert_eq!(
@@ -142,9 +148,7 @@ fn status_lifecycle(store: &dyn MessageStore) {
         .unwrap());
 
     let inc = incoming(store, &a, &p, 3, "z");
-    assert!(!store
-        .set_status(&a, &p, &inc.id, MessageStatus::Delivered)
-        .unwrap());
+    assert!(!store.mark_delivered(&a, &p, &inc.id, 10).unwrap());
     assert_eq!(store.get(&a, &p, &inc.id).unwrap(), Some(inc));
     assert!(!store
         .set_status(&a, &p, &new_message_id(), MessageStatus::Failed)
@@ -209,9 +213,7 @@ fn undelivered_is_bounded_and_ordered(store: &dyn MessageStore) {
         .set_status(&a, &p, &failed.id, MessageStatus::Failed)
         .unwrap();
     let delivered = out(store, &a, &p, 2, "d");
-    store
-        .set_status(&a, &p, &delivered.id, MessageStatus::Delivered)
-        .unwrap();
+    store.mark_delivered(&a, &p, &delivered.id, 10).unwrap();
     incoming(store, &a, &p, 3, "e");
     assert_eq!(
         ids(&store.undelivered(&a, usize::MAX).unwrap()),
