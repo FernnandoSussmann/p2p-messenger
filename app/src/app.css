@@ -410,6 +410,7 @@ hr, .divider { border: 0; border-top: 1px solid var(--border); margin: var(--spa
 /* end conversation */
 
 /* contact info */
+.contact-info-body { border: 0; margin: 0; padding: 0; min-width: 0; }
 .contact-info-head { flex-wrap: nowrap; }
 .contact-info-name { margin: 0; font-size: inherit; flex: 1 1 auto; min-width: 0; }
 /* end contact info */

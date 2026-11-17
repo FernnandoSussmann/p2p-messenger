@@ -50,6 +50,7 @@ describe("Chat", () => {
     expect(items.map((i) => i.querySelector(".body")!.textContent)).toEqual(["body 1", "body 2", "body 3"]);
     expect(screen.getByRole("log")).toBeTruthy();
     expect(screen.getByText("Connected")).toBeTruthy();
+    expect(screen.getByText("Bob").closest(".conv-header")).not.toBeNull();
     expect(screen.getByTestId("badge-unverified")).toBeTruthy();
   });
 
@@ -71,8 +72,9 @@ describe("Chat", () => {
 
   it("removed_contact_renders_nothing_and_goes_to_contacts", async () => {
     showChat(ID);
-    contacts.set([]);
     await show([]);
+    contacts.set([]);
+    await waitFor(() => expect(get(screenStore)).toEqual({ kind: "tab", tab: "contacts" }));
     expect(screen.queryByRole("region", { name: "Conversation" })).toBeNull();
     expect(screen.queryByText("This contact was removed.")).toBeNull();
     expect(screen.queryByLabelText("Message")).toBeNull();

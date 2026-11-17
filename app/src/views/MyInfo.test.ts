@@ -41,8 +41,15 @@ describe("MyInfo", () => {
     render(MyInfo);
     await screen.findByTestId("ticket");
     expect(screen.getByRole("heading", { level: 2, name: "My Info" })).toHaveClass("visually-hidden");
-    const order = ["Connection ticket", "NodeId"].map((n) => screen.getByRole("heading", { name: n }));
-    expect(order[0].compareDocumentPosition(order[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const els = [
+      screen.getByRole("radiogroup", { name: "Theme" }),
+      screen.getByLabelText("Display name"),
+      screen.getByRole("heading", { name: "Connection ticket" }),
+      screen.getByRole("heading", { name: "NodeId" }),
+    ];
+    for (let i = 1; i < els.length; i++) {
+      expect(els[i - 1].compareDocumentPosition(els[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
     expect(screen.getByTestId("node-id")).toHaveClass("node-id");
     expect(screen.getAllByRole("separator")).toHaveLength(2);
   });

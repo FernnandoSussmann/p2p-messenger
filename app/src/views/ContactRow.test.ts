@@ -55,6 +55,17 @@ describe("ContactRow", () => {
     expect(openChat).toHaveBeenCalledWith(ID);
   });
 
+  it("is a focusable native button, so Enter and Space activate it", () => {
+    show();
+    const row = screen.getByTestId("contact-row");
+    expect(row.tagName).toBe("BUTTON");
+    expect(row).toHaveAttribute("type", "button");
+    expect(row).not.toBeDisabled();
+    expect(row.getAttribute("tabindex")).not.toBe("-1");
+    row.focus();
+    expect(row).toHaveFocus();
+  });
+
   it("does not render the self-asserted name", () => {
     const { container } = show({ self_name: "Mallory" });
     expect(container.textContent).not.toContain("Mallory");

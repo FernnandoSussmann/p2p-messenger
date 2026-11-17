@@ -127,6 +127,23 @@ describe("ContactInfo", () => {
     expect(get(routerScreen)).toEqual({ kind: "tab", tab: "contacts" });
   });
 
+  it("external_removal_while_remove_dialog_open_disables_everything_but_back", async () => {
+    render(ContactInfo, { nodeId: ID });
+    await fireEvent.click(screen.getByRole("button", { name: "Remove…" }));
+    contacts.set([mkContact({ node_id: "b".repeat(64) })]);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Rename" })).toBeDisabled());
+    for (const el of [
+      screen.getByRole("button", { name: "Remove…" }),
+      screen.getByRole("button", { name: "Clear history…" }),
+      screen.getByLabelText("Search this conversation"),
+      screen.getByRole("button", { name: "Remove contact" }),
+    ]) {
+      expect(el).toBeDisabled();
+    }
+    expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /Mark verified/ })).toBeNull();
+  });
+
   it("removed_contact_redirects_to_contacts_and_renders_nothing", async () => {
     contacts.set([mkContact({ node_id: "b".repeat(64) })]);
     const { container } = render(ContactInfo, { nodeId: ID });

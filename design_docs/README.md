@@ -49,8 +49,8 @@ Svelte UI for one coherent feature.
 All six docs are v1 drafts targeting the desktop build (Linux/macOS/Windows);
 DD-03 is implemented, with the deviations listed in its Status line. DD-06 is implemented (see its Implementation notes).
 DD-07 (visual identity and UX redesign, based on
-[`../design/visual-identity.html`](../design/visual-identity.html)) and DD-08 (outgoing delivery
-time) are drafts, to be implemented in that order.
+[`../design/visual-identity.html`](../design/visual-identity.html)) is implemented (see its
+Implementation notes). DD-08 (outgoing delivery time) is the next draft.
 Mobile/web, attachments, offline store-and-forward, QR *scanning*, multiple
 identities, passphrase-at-rest, and multi-device sync are **out of scope** for
 v1 (see each doc's non-goals).
