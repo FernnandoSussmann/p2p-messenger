@@ -36,7 +36,7 @@ const mkContact = (o: Partial<ContactDto> = {}): ContactDto => ({
 });
 const mk = (i: number, o: Partial<MessageDto> = {}): MessageDto => ({
   node_id: ID, id: `m${i}`, seq: i, cursor: `c${i}`, direction: "in", body: `body ${i}`,
-  sent_at_ms: 1_700_000_000_000 + i * 1000, received_at_ms: null, status: "received", ...o,
+  sent_at_ms: 1_700_000_000_000 + i * 1000, received_at_ms: null, delivered_at_ms: null, status: "received", ...o,
 });
 
 afterEach(cleanup);

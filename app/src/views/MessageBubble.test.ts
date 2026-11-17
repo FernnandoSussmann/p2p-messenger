@@ -11,7 +11,7 @@ import type { MessageDto } from "../chat";
 
 const mk = (o: Partial<MessageDto> = {}): MessageDto => ({
   node_id: "a".repeat(64), id: "m1", seq: 1, cursor: "c", direction: "out", body: "hello",
-  sent_at_ms: 1_700_000_000_000, received_at_ms: null, status: "delivered", ...o,
+  sent_at_ms: 1_700_000_000_000, received_at_ms: null, delivered_at_ms: null, status: "delivered", ...o,
 });
 const show = (o: Partial<MessageDto> = {}) => render(MessageBubble, { message: mk(o) });
 
