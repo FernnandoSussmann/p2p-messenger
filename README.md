@@ -264,10 +264,27 @@ The gate is self-cleaning:
 - A cleanup failure after a passing gate only warns; the next run retries.
 - Never bypass the hook with `--no-verify`.
 
-Verifying the gate: stage a file under `app/` containing a planted
-secret-looking identifier (e.g. a Tauri return type referencing the key type
-name) and run `git commit`; the hook must reject it. Do this manually after
-changing the hook.
+Verifying the gate by hand (after changing the hook), one at a time:
+
+1. A passing commit leaves no workspace artifacts: `find target/gate/debug
+   -maxdepth 2 -type f \( -name 'app' -o -name 'app-*' -o -name 'integration-*'
+   -o -name 'core-*' -o -name 'protocol-*' -o -name 'libcore-*' -o -name
+   'libprotocol-*' -o -name 'libapp_lib-*' -o -name 'logging_canary-*' -o -name
+   'profile_isolation-*' \) | wc -l` prints `0`, `libserde-*` is still in
+   `target/gate/debug/deps`, and `target/debug` is untouched.
+2. Stage a file under `app/` containing a planted secret-looking identifier (e.g.
+   a Tauri return type referencing the key type name). `git commit` must be
+   rejected and the `find` above must still print `0`. Unstage and delete it.
+3. `touch core/src/lib.rs`, start a commit and press Ctrl-C during `cargo test`:
+   cleanup runs, `flock -n target/gate.lock true && echo released` prints
+   `released`, and the `find` prints `0`.
+4. `echo stale > target/gate/.gate-stamp`: the next run wipes the gate dir and
+   builds cold.
+5. Delete the `cargo::rustc-link-arg` line in `app/src-tauri/build.rs`, stage it
+   and commit: the exported-symbol check must reject it listing `sqlite3_*`, and
+   cleanup still runs. Restore it with `git checkout -- app/src-tauri/build.rs`.
+
+Never commit these temporary edits.
 
 ### Reclaiming disk space
 

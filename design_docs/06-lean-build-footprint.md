@@ -1,7 +1,7 @@
 # DD-06 — Lean Build Footprint, Self-Cleaning Test Gate & End-User Binary
 
 **Feature slice:** cross-cutting build/test/release infrastructure (no runtime feature)
-**Status:** Draft
+**Status:** Implemented (GUI checklist on the release binary, the Windows/macOS builds and the PR are still pending; see Implementation notes)
 **Affected:** root `Cargo.toml` (profiles, `default-members`), `app/src-tauri/build.rs`,
 `app/src-tauri/tauri.conf.json`, `core/tests/`, `headless/tests/`,
 `app/src-tauri/tests/`, `.githooks/`, root `package.json`, `scripts/`, `.gitignore`,
@@ -546,42 +546,42 @@ is far off.
 
 ## Definition of done
 
-- [ ] Root `Cargo.toml` dev profile: line tables only for workspace crates;
+- [x] Root `Cargo.toml` dev profile: line tables only for workspace crates;
       no debug info and `opt-level = "s"` for all non-workspace packages.
-- [ ] Root `Cargo.toml` release profile: `strip = true`, fat LTO,
+- [x] Root `Cargo.toml` release profile: `strip = true`, fat LTO,
       `codegen-units = 1`, `opt-level = "s"`, panic unwind (unchanged).
-- [ ] `default-members` excludes `headless`, which stays a workspace member.
-- [ ] `core` has exactly three integration binaries (`integration`,
+- [x] `default-members` excludes `headless`, which stays a workspace member.
+- [x] `core` has exactly three integration binaries (`integration`,
       `logging_canary`, `profile_isolation`), and `headless` and `app` one
       each. Separate binaries carry a global-state comment.
-- [ ] Test counts are identical before and after (recorded). The merged suite
+- [x] Test counts are identical before and after (recorded). The merged suite
       passes 10× in a row. The mDNS opt-in command is updated.
-- [ ] Hook: `target/gate`, incremental off, lock, stamp wipe, unchanged gate
+- [x] Hook: `target/gate`, incremental off, lock, stamp wipe, unchanged gate
       sequence, the Linux exported-symbol check, and `gate-cleanup.sh` always
       run with the exit status preserved.
-- [ ] `gate-cleanup.sh` path-safety refusals and size cap are implemented and
+- [x] `gate-cleanup.sh` path-safety refusals and size cap are implemented and
       covered by the `gate_cleanup` test.
-- [ ] `pre_commit_hook` self-test asserts every old needle plus the
+- [x] `pre_commit_hook` self-test asserts every old needle plus the
       gate-dir/trap/lock/symbol-check needles.
-- [ ] `app/src-tauri/build.rs` hides static-archive symbols on Linux, and
+- [x] `app/src-tauri/build.rs` hides static-archive symbols on Linux, and
       `nm -D` shows 0 `sqlite3_*` exports for debug and release.
 - [ ] `tauri.conf.json` has `build.removeUnusedCommands = true`. The GUI
       checklist passes on the release binary.
-- [ ] `npm run release` + `scripts/build-release.mjs` work as in §5, including
+- [x] `npm run release` + `scripts/build-release.mjs` work as in §5, including
       every binary check, the guaranteed temp-dir cleanup, the atomic copy,
       and the `.sha256`. `release/` is in `.gitignore`.
-- [ ] Each release check is proven to fail on a bad input. The interrupt and
+- [x] Each release check is proven to fail on a bad input. The interrupt and
       stale-lock cases behave as specified.
-- [ ] Guard deliberate-violation checks pass. The planted-secret commit is
+- [x] Guard deliberate-violation checks pass. The planted-secret commit is
       rejected **and** cleaned up.
-- [ ] Measurements (a)–(e) are recorded.
-- [ ] README updated:
+- [x] Measurements (a)–(e) are recorded.
+- [x] README updated:
   - "Build & test", "Pre-commit hook", and cleanup commands;
   - the debug-info trade-off and the full-DWARF override;
   - a new "Building the end-user binary" section (`npm run release`, prereqs
     per OS, output location, how to verify the SHA-256);
   - "Running the release binary" runtime requirements.
-- [ ] AGENTS.md updated (Commands, Testing paths, `release/` and
+- [x] AGENTS.md updated (Commands, Testing paths, `release/` and
       `target/gate/` in Layout notes). `design_docs/README.md` lists DD-06.
 - [ ] The full hook passes. The PR follows the template and states "wire format
       unchanged".
@@ -599,3 +599,74 @@ is far off.
   and keeping panic unwind are this doc's recommendations, open to review.
 - **The Linux SQLCipher symbol-export fix** is included here because it affects
   the binary this doc ships. It can be split into its own change if you prefer.
+
+## Implementation notes
+
+Measured on Linux x86-64 (Linux Mint kernel 7.0, 24 logical cores, 22 GB RAM,
+rustc 1.99.1), 2026-11-16.
+
+| Id | Result |
+|---|---|
+| (a) `cargo clean && npm start` | `target/debug` 1.9 GB (1,963,340 KiB), dev `app` 72 MB, cold build 2m50s. Matches the expectation. |
+| (b) one hook run | `target/gate` 2.9 GB: third-party cache only; 0 workspace artifacts afterwards; `target/debug` size and mtime unchanged. |
+| (c) five consecutive hook runs | `target/gate` stayed at 2874 MiB after every run: no growth. |
+| (d) warm hook run | 66 to 217 s (217, 124, 79, 66, 90 s); the first cold run took 5m31s; a stamp-triggered cold rebuild took 4m51s. |
+| (e) `npm run release` | 2m32s from a clean clone; binary 20,502,792 bytes (20.5 MB, 5.1% above the 19.5 MB expectation: within tolerance, not investigated further). |
+
+Evidence for the DoD items:
+
+- Test counts before (`6910a60`) and after, by `#[test]`/`#[tokio::test]`
+  count: `protocol` 8, `core` 387, `messenger-headless` 40, `app` 120. After
+  (`cargo test -p <crate> --all-targets -- --list`): 8, 387, 40, 126. The extra 6
+  are the new `gate_cleanup` tests. `core --test integration` passed 10 times
+  in a row (124 passed, 1 ignored); the opt-in `discovery_lan` real-mDNS test,
+  `logging_canary` and `profile_isolation` pass.
+- Exported symbols: 51 `sqlite3_*` before; 0 for the debug and release `app`.
+  Removing the linker arg makes the hook (51 symbols listed) and the release
+  script fail; the cleanup still runs.
+- Dev profile: `.debug_line` present in `app`; no `.debug_*` sections in a
+  third-party `.rlib`; workspace `.rlib` has line tables only (0
+  `DW_TAG_variable`). The linked `app` shows 1611 `DW_TAG_variable`, all from C
+  objects and the precompiled std (for example ring), not from Rust crates built
+  here. A scratch panic with `RUST_BACKTRACE=1` shows `protocol/src/lib.rs:239`.
+- Hook checks: passing run leaves 0 workspace artifacts and keeps
+  `libserde-*`; planted `DbKey` under `app/` is rejected and cleaned; Ctrl-C
+  during `cargo test` exits 130, runs cleanup and releases the lock; a changed
+  stamp wipes and rebuilds cold; the linker-arg removal is rejected; two
+  concurrent runs both pass (the second waits); a symlinked `target/gate` is
+  refused; `P2PM_GATE_MAX_MIB=1` wipes the gate dir.
+- Release checks on a clean clone: happy path produces the binary and
+  `.sha256` (`sha256sum -c` OK), no `p2pm-release-*` temp dir, 0 `$HOME`
+  strings, no test-double names. Bad inputs, each exit 1 with `release/`
+  unchanged and no temp dir: test-support (see below), no path remap
+  ("builder paths embedded"), no linker arg ("exports sqlite3_*"), devtools
+  (stopped in preflight before Cargo ran), `CARGO_PROFILE_RELEASE_STRIP=false`
+  (env scrubbed: the binary is still stripped), stale lockfile (Cargo `--locked`
+  error, nothing published). Ctrl-C during the Cargo build: exit 130, temp dir
+  deleted, `release/` untouched. A simulated failure after the copy leaves no
+  `.partial-*`.
+- Test-support caveat confirmed: with only `features = ["test-support"]`, fat LTO
+  removes the unreachable doubles and the check passes; with a reference from
+  `run()` it fails ("test-only code in binary: MemoryContactStore").
+
+Deviations from the original DD-06 text (all agreed during implementation):
+
+- Clippy runs with `--workspace` (so `headless` is still linted).
+- The `/target` path remap is added to the build-path remaps.
+- Size cap variable is `P2PM_GATE_MAX_MIB` (MiB, default 8192).
+- Lock uses `flock`, with an atomic `target/gate.lockdir` fallback where it is
+  missing.
+- Release file-name tokens: linux/macos/windows and x86_64/aarch64.
+- An existing same-name binary in `release/` is refused, never replaced.
+- `.dockerignore` lists `release/`.
+- The release script deletes only its own `.partial-*` files in `release/`.
+- The hook refuses a symlinked `target/gate` (and its lock and stamp), but a
+  symlinked `target/` is allowed.
+- The exported-symbol check runs right after `cargo build`.
+
+Not run: the GUI checklist on the release binary (including `removeUnusedCommands`
+coverage and the fresh/existing profile checks), the Windows and macOS builds
+(the Windows builder-path check is implemented but unverified), and the PR. A
+pre-existing `dead_code` warning pair for the test-only `Ledger` in
+`core/src/contacts/store.rs` shows in plain builds (clippy with all features is
+clean); it is outside DD-06.
