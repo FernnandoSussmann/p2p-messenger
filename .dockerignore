@@ -9,3 +9,4 @@ app/dist/
 **/control.sock
 .claude/
 design_docs/
+release/
