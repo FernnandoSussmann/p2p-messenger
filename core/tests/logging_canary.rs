@@ -1,3 +1,6 @@
+//! Separate test binary on purpose (DD-06 §3): installs the process-global
+//! tracing subscriber; do not merge into `integration`.
+//!
 //! Runtime canary: with the production log filter at TRACE, two chatting
 //! loopback nodes must leave no name, nickname, body, query, key or ticket in
 //! the log directory, yet the log must carry connection state with short

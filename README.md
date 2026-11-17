@@ -22,11 +22,12 @@ only once they carry real code — no empty stubs or placeholder modules.
 
 ## Run the app
 
-Requires Rust 1.95 or newer (the workspace MSRV), Node.js 20+, and the [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/)
-(on Debian/Ubuntu: `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev`).
+Requires Rust 1.95 or newer (the workspace MSRV), Node.js 20+, and the [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/).
 A C compiler, `perl` and `make` are also required: SQLCipher and a vendored
-OpenSSL are compiled from source (on Windows, install Strawberry Perl). The
-first build takes a few minutes.
+OpenSSL are compiled from source (on Windows, install Strawberry Perl). See
+[Installing the prerequisites](#installing-the-prerequisites) for the
+`apt`, `dnf`, `pacman`, Homebrew and `winget` commands. The first build takes a
+few minutes.
 
 ```sh
 npm start
@@ -217,6 +218,17 @@ cargo test --workspace   # includes the Level-1 two-node tests (real iroh endpoi
 cd app && npm ci && npm test && npm run check && npm run build
 ```
 
+`cargo build` and `npm start` build only `protocol`, `core` and `app`. Build the
+test-only headless node explicitly with `cargo build -p messenger-headless`
+(the Docker image already does).
+
+Debug builds trade debug info for build size: our crates keep line tables, so
+panic backtraces show `file:line`; debuggers show locations but no local
+variables. Dependency frames have names but no line numbers. Dependencies are
+optimized (`opt-level = "s"`), so the first cold build is about 40 s slower and
+later edit-rebuild is unchanged. For a local debugging session with full DWARF
+run `CARGO_PROFILE_DEV_DEBUG=true cargo build` (or `npm start`); never commit it.
+
 ### Pre-commit hook (the test gate)
 
 There is no CI, so the tracked hook in `.githooks/pre-commit` is the mandatory
@@ -227,17 +239,152 @@ git config core.hooksPath .githooks
 ```
 
 It blocks the commit on any failure of: `cargo fmt --all --check`,
-`cargo clippy --all-targets --all-features -- -D warnings`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
 `cargo test --workspace` (includes the secret-leak guards, the log redaction
 guard `log_redaction_guard` and the SQL namespacing guard
 `sql_namespacing_guard`), the secret grep
 gates (no key types under `app/`; clipboard only in `MyInfo.svelte`), and the
 frontend `npm run check`, `npm test` and `npm run build`.
 
-Verifying the gate: stage a file under `app/` containing a planted
-secret-looking identifier (e.g. a Tauri return type referencing the key type
-name) and run `git commit`; the hook must reject it. Do this manually after
-changing the hook.
+The gate is self-cleaning:
+
+- It builds in `target/gate`, never `target/debug`, with incremental
+  compilation off.
+- One run at a time per clone (a lock; `flock`, or an atomic `target/gate.lockdir`
+  where `flock` is missing). A symlinked `target/gate` is refused.
+- A toolchain (`rustc -vV`) or `Cargo.lock` change wipes the gate dir, so the
+  next run is cold.
+- After every run (pass, fail or Ctrl-C), `.githooks/gate-cleanup.sh` deletes
+  only the outputs of our own crates (`cargo clean -p` for `protocol`, `core`,
+  `messenger-headless` and `app`); third-party libraries stay cached.
+- If `target/gate` still exceeds a size cap it is wiped entirely. The cap is
+  `P2PM_GATE_MAX_MIB` (MiB, positive integer, default `8192`; anything else
+  falls back to the default).
+- On Linux the gate also fails if the `app` binary exports `sqlite3_*` symbols.
+- A cleanup failure after a passing gate only warns; the next run retries.
+- Never bypass the hook with `--no-verify`.
+
+Verifying the gate by hand (after changing the hook), one at a time:
+
+1. A passing commit leaves no workspace artifacts: `find target/gate/debug
+   -maxdepth 2 -type f \( -name 'app' -o -name 'app-*' -o -name 'integration-*'
+   -o -name 'core-*' -o -name 'protocol-*' -o -name 'libcore-*' -o -name
+   'libprotocol-*' -o -name 'libapp_lib-*' -o -name 'logging_canary-*' -o -name
+   'profile_isolation-*' \) | wc -l` prints `0`, `libserde-*` is still in
+   `target/gate/debug/deps`, and `target/debug` is untouched.
+2. Stage a file under `app/` containing a planted secret-looking identifier (e.g.
+   a Tauri return type referencing the key type name). `git commit` must be
+   rejected and the `find` above must still print `0`. Unstage and delete it.
+3. `touch core/src/lib.rs`, start a commit and press Ctrl-C during `cargo test`:
+   cleanup runs, `flock -n target/gate.lock true && echo released` prints
+   `released`, and the `find` prints `0`.
+4. `echo stale > target/gate/.gate-stamp`: the next run wipes the gate dir and
+   builds cold.
+5. Delete the `cargo::rustc-link-arg` line in `app/src-tauri/build.rs`, stage it
+   and commit: the exported-symbol check must reject it listing `sqlite3_*`, and
+   cleanup still runs. Restore it with `git checkout -- app/src-tauri/build.rs`.
+
+Never commit these temporary edits.
+
+### Reclaiming disk space
+
+- `cargo clean` removes everything, including `target/gate`.
+- Optional, never required: `cargo sweep --time 7` or `cargo sweep --installed`.
+- Manual `cargo test` writes to `target/debug` and is not auto-cleaned.
+- Folders: `target/debug/` holds the dev app and manual runs, `target/gate/` is
+  the hook's dependency cache, and `release/` holds end-user binaries.
+
+### Building the end-user binary
+
+```sh
+npm run release
+```
+
+Prerequisites: Rust 1.95+, Node.js 20+, and per OS: on Linux the WebKitGTK 4.1,
+GTK 3 and libsoup 3 dev packages plus `pkg-config` and binutils; on macOS the
+Xcode command line tools; on Windows the MSVC Build Tools. SQLCipher and
+OpenSSL are compiled from source, so every OS also needs a C compiler, `perl`
+and `make`. The script's preflight checks these and names any that are missing.
+
+#### Installing the prerequisites
+
+**Rust** (all OSes): install with [rustup](https://rustup.rs). Distribution
+`rustc` packages are usually older than 1.95.
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Linux / macOS
+rustup update stable
+```
+
+**Node.js 20+**: distribution packages are often older (Ubuntu 22.04 ships 12,
+Debian 12 ships 18). Check with `node --version`. If it is too old, use the
+installer from [nodejs.org](https://nodejs.org) or a version manager such as
+`nvm` or `fnm`.
+
+**Debian / Ubuntu / Linux Mint (`apt`):**
+
+```sh
+sudo apt update
+sudo apt install build-essential perl pkg-config binutils curl \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libdbus-1-dev
+```
+
+**Fedora / RHEL family (`dnf`; `yum` is an alias for it on current RHEL):**
+
+```sh
+sudo dnf install gcc gcc-c++ make perl pkgconf-pkg-config binutils curl \
+  webkit2gtk4.1-devel gtk3-devel libsoup3-devel dbus-devel
+```
+
+Install the full `perl` package, not just `perl-interpreter`: the OpenSSL build
+needs its standard modules. WebKitGTK 4.1 is not packaged on older releases
+such as RHEL 8.
+
+**Arch Linux (`pacman`):**
+
+```sh
+sudo pacman -S --needed base-devel perl curl webkit2gtk-4.1 gtk3 libsoup3 dbus
+```
+
+**macOS (Homebrew):**
+
+```sh
+xcode-select --install   # C compiler, make, perl, otool
+brew install node
+```
+
+**Windows (`winget`, in PowerShell):**
+
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install Rustlang.Rustup
+winget install OpenJS.NodeJS.LTS
+winget install StrawberryPerl.StrawberryPerl
+```
+
+The WebView2 runtime is preinstalled on Windows 10/11. Open a new terminal
+after installing so the new `PATH` takes effect.
+
+The script runs `npm ci` and `tauri build --no-bundle --ci -- --locked` in a
+throwaway temp target dir (with build paths remapped), then checks the binary:
+no test doubles, no builder paths, no exported `sqlite3_*` (Linux), stripped, no
+devtools, frontend embedded. Any failed check publishes nothing. The Windows
+builder-path check is implemented but not yet verified on Windows.
+
+Output: `release/p2p-messenger-<ver>-<os>-<arch>[.exe]` plus a `.sha256` file.
+Verify it with `sha256sum -c <name>.sha256` (Linux), `shasum -a 256 -c
+<name>.sha256` (macOS) or `Get-FileHash` (Windows). Builds are not claimed to be
+reproducible. The script never deletes or overwrites anything in `release/` (an
+existing same-name binary is refused); it only removes its own partial files.
+Interrupting it leaves no temp dir and no partial file.
+
+### Running the release binary
+
+- Linux: WebKitGTK 4.1, GTK 3, libsoup 3, D-Bus and a Secret Service keychain.
+- Windows: the WebView2 runtime (preinstalled on Windows 10/11).
+- macOS: nothing extra; a bare executable runs (an `.app` bundle is deferred).
+- `--profile`, `MESSENGER_PROFILE` and `MESSENGER_RELAY_URL` work at runtime,
+  exactly as in dev.
 
 ### Manual GUI checklist
 
@@ -344,7 +491,7 @@ for multicast. The real mDNS test is opt-in because it needs a
 multicast-capable interface:
 
 ```sh
-cargo test -p core --test discovery_lan -- --ignored
+cargo test -p core --test integration discovery_lan -- --ignored
 ```
 
 **Level 2** (two full app instances on one machine): `--profile <name>` or
@@ -416,14 +563,14 @@ Scope:
 - The containers exercise mDNS discovery and the ticket path over direct
   addresses. They run `--relay disabled`, so the
   **relay** path is not tested by Docker; it is covered by the Level-1
-  `core/tests/discovery_relay.rs`.
+  `core/tests/integration/discovery_relay.rs`.
 - The Docker bridge is not `internal: true`: mDNS needs the default route, so
   egress is open. Headless nodes always run with n0 internet lookup disabled
   (no n0 DNS/pkarr publishing or resolution); `--relay` is honored as given.
   The desktop app keeps internet lookup on.
 - Parity: the same trust-gate and presence scenarios run against in-process
-  nodes (`core/tests/discovery_parity.rs`) and against real headless processes
-  (`headless/tests/parity.rs`). Host processes use `--lan off` (loopback
+  nodes (`core/tests/integration/discovery_parity.rs`) and against real headless processes
+  (`headless/tests/integration/parity.rs`). Host processes use `--lan off` (loopback
   multicast is unreliable), so the presence scenario proves presence
   **persistence and dialability** at both levels. Presence **visibility** is
   checked by `docker/smoke.sh` stage 5 (and at Level 1 by `discovery_lan.rs`).

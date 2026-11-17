@@ -23,12 +23,14 @@ Cargo workspace built from vertical feature slices.
 | `docker/`        | **Test-only** `headless.Dockerfile`, `compose.yaml` and `smoke.sh` (two isolated nodes; `docker/smoke.sh` is not part of the hook). No stability or security guarantees. |
 | `app/src/`       | Svelte frontend (`views/`, `lib/`), Vitest tests alongside (`*.test.ts`).     |
 | `.githooks/`     | Tracked pre-commit hook: the mandatory local test gate (there is no CI).      |
+| `scripts/`       | `build-release.mjs`: `npm run release` builds and verifies the end-user binary into git-ignored `release/`. |
 
 Notes:
 - The package name `core` shadows std `core`; dependents import it with `package = "core"`.
 - Shared dependency versions live in the root `Cargo.toml` `[workspace.dependencies]`; member crates use `dep.workspace = true`.
 - `core` has a `test-support` feature exposing test doubles (e.g. `identity::testing`, `discovery::testing`, `contacts::testing`: `MemoryContactStore`, `FailingContactStore`, `RecordingHistoryEraser`, `BookCell`; `identity::MemorySettingsStore` (always available); `messaging::testing`: `MemoryMessageStore`, `FailingMessageStore`, `ChatPeer`, `Faults`, `send_raw_frame`). Discovery exposes authorized channels to other slices only through `ChannelHandler`; messaging never dials.
-- All persisted user data (settings, contacts, messages) lives in the SQLCipher `messenger.db` through `core::storage` (keyed open, typed `StorageError`, forward-only migrations; failures are latched, never reset or recreate the file). Never write it anywhere else. New tables are new migrations in `storage/schema.rs`, with SQL owned by the slice and `account_id` on every row; the only tables without it are `messages_fts` (FTS5 external-content index, reached only through a join on `messages.account_id`) and `legacy_imports` (install bookkeeping), both documented and allowlisted in `core/tests/sql_namespacing_guard.rs`. The old plaintext `settings.json`, `contacts.json` and `known_peers.json` are only read once by `storage::legacy` and then removed.
+- All persisted user data (settings, contacts, messages) lives in the SQLCipher `messenger.db` through `core::storage` (keyed open, typed `StorageError`, forward-only migrations; failures are latched, never reset or recreate the file). Never write it anywhere else. New tables are new migrations in `storage/schema.rs`, with SQL owned by the slice and `account_id` on every row; the only tables without it are `messages_fts` (FTS5 external-content index, reached only through a join on `messages.account_id`) and `legacy_imports` (install bookkeeping), both documented and allowlisted in `core/tests/integration/sql_namespacing_guard.rs`. The old plaintext `settings.json`, `contacts.json` and `known_peers.json` are only read once by `storage::legacy` and then removed.
+- `target/gate/` is owned by the pre-commit hook: its workspace-crate outputs are deleted after every run (`.githooks/gate-cleanup.sh`); `target/debug/` is never touched by the hook. `release/` holds git-ignored end-user binaries.
 - Contacts are the single trust store (`ContactBook` implements `discovery::KnownPeers`).
 
 ## Commands
@@ -37,18 +39,25 @@ Notes:
 npm start                        # install frontend deps + run the desktop app (tauri dev)
 cargo test --workspace           # all Rust tests
 cargo fmt --all --check
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo build                      # protocol, core, app only: the test-only `headless` is not a default member
 cd app && npm ci && npm test && npm run check && npm run build   # frontend
 docker/smoke.sh                  # Level-3 two-container smoke (needs Docker; not in the hook)
+npm run release                  # end-user binary -> release/ (+ .sha256), built in a temp target dir
+cargo clean                      # reclaim everything incl. target/gate (optional: cargo sweep --time 7 / --installed, never required)
 ```
 
 Do not use plain `cargo run` for the app: it shows "connection refused" because
 nothing serves the dev frontend. Use `npm start`.
 
+Manual `cargo test` output in `target/debug` is not auto-cleaned.
+
 Install the hook once per clone: `git config core.hooksPath .githooks`. It runs
-fmt, clippy (warnings are errors), workspace tests, `cargo build`, the secret
-gates below, and the frontend check/test/build. Never bypass it (`--no-verify`);
-fix the failure instead.
+in `target/gate` (no incremental, one run at a time), then fmt, clippy (warnings
+are errors), workspace tests, `cargo build`, a Linux check that `app` exports no
+`sqlite3_*`, the secret gates below, and the frontend check/test/build; it always
+runs `.githooks/gate-cleanup.sh` afterwards (size cap `P2PM_GATE_MAX_MIB`, default
+8192). Never bypass it (`--no-verify`); fix the failure instead.
 
 ## Conventions
 
@@ -68,11 +77,11 @@ fix the failure instead.
 - Clipboard access (`writeText` / `clipboard`) is permitted **only** in `app/src/views/MyInfo.svelte` (and tests).
 - Logs must never contain message plaintext, private keys, or secrets. NodeIds and addresses are fine.
 - Everything on the wire is encrypted; relays only ever see ciphertext.
-- Logging goes through `core::logging` helpers. The redaction guard (`core/tests/log_redaction_guard.rs`) is enforced; extend its allowlist only with reviewed, non-sensitive field names.
+- Logging goes through `core::logging` helpers. The redaction guard (`core/tests/integration/log_redaction_guard.rs`) is enforced; extend its allowlist only with reviewed, non-sensitive field names.
 
 ## Testing
 
-- Rust unit and integration tests: `core/tests/`, plus `#[cfg(test)]` modules; app-shell flow tests live in `app/src-tauri/` (e.g. `first_run_flow_end_to_end`, `ticket_connect_accept_flow_end_to_end`, `chat_flow_end_to_end`, `tests/pre_commit_hook.rs`). Level-1 two-node tests (real iroh endpoints on loopback, plus a relay-only canary capture) live in `core/tests/discovery_*.rs`; the Level-1 messaging engine tests live in `core/tests/messaging_*.rs`. Storage and logging guards: `core/tests/storage_*.rs` (open, namespacing, legacy import), `sql_namespacing_guard.rs`, `log_redaction_guard.rs` and `logging_canary.rs`.
+- Rust unit and integration tests: `core/tests/`, plus `#[cfg(test)]` modules; app-shell flow tests live in `app/src-tauri/` (e.g. `first_run_flow_end_to_end`, `ticket_connect_accept_flow_end_to_end`, `chat_flow_end_to_end`, `app/src-tauri/tests/integration/pre_commit_hook.rs`). Each crate has one integration binary (`core`, `headless`, `app`: `tests/integration/main.rs`, one module per file); `core` also keeps `core/tests/logging_canary.rs` and `core/tests/profile_isolation.rs` as separate binaries because they install process-global state, so any new test that sets a global subscriber, default store, env var or working directory gets its own binary. Level-1 two-node tests (real iroh endpoints on loopback, plus a relay-only canary capture) live in `core/tests/integration/discovery_*.rs`; the Level-1 messaging engine tests live in `core/tests/integration/messaging_*.rs`. Storage and logging guards: `core/tests/integration/storage_*.rs` (open, namespacing, legacy import), `sql_namespacing_guard.rs`, `log_redaction_guard.rs` and `core/tests/logging_canary.rs`. Headless tests: `headless/tests/integration/`.
 - Frontend component tests: `app/src/**/*.test.ts`.
 - No Tauri WebDriver is available here, so GUI flows are covered at command-invoke and component level, plus the manual checklist in `README.md`. If you change the pre-commit hook, verify it by staging a file under `app/` containing a secret-looking identifier and confirming the commit is rejected.
 - Keychain-dependent tests should use the in-memory test doubles, not the real OS keychain.
