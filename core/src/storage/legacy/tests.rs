@@ -1,5 +1,5 @@
 //! Report-level checks of the legacy import. End-to-end behaviour through the
-//! public API lives in `core/tests/storage_legacy_import.rs`.
+//! public API lives in `core/tests/integration/storage_legacy_import.rs`.
 
 use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};

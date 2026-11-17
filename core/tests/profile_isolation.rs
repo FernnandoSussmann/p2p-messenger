@@ -1,3 +1,6 @@
+//! Separate test binary on purpose (DD-06 §3): installs the process-global
+//! keyring_core default store; do not merge into `integration`.
+//!
 //! Two profiles on one machine: separate keychain namespaces and data dirs.
 //!
 //! `keyring_core::mock` keys entries by (service, user), so same-account

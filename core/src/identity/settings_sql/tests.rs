@@ -29,7 +29,7 @@ fn with_keys(accounts: &[AccountId]) -> (tempfile::TempDir, Arc<Storage>, SqlCip
 
 /// The behaviour every [`SettingsStore`] must have. Accounts are fresh per
 /// call; the SQL store opens a single account per `Storage`, so the
-/// account-isolation checks live in `core/tests/storage_namespacing.rs`.
+/// account-isolation checks live in `core/tests/integration/storage_namespacing.rs`.
 pub(crate) fn settings_contract(store: &dyn SettingsStore, id: &AccountId) {
     assert!(store.get_display_name(id).unwrap().is_none());
     assert!(store.get_provisioned_at(id).unwrap().is_none());

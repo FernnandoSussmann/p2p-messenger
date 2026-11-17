@@ -217,6 +217,17 @@ cargo test --workspace   # includes the Level-1 two-node tests (real iroh endpoi
 cd app && npm ci && npm test && npm run check && npm run build
 ```
 
+`cargo build` and `npm start` build only `protocol`, `core` and `app`. Build the
+test-only headless node explicitly with `cargo build -p messenger-headless`
+(the Docker image already does).
+
+Debug builds trade debug info for build size: our crates keep line tables, so
+panic backtraces show `file:line`; debuggers show locations but no local
+variables. Dependency frames have names but no line numbers. Dependencies are
+optimized (`opt-level = "s"`), so the first cold build is about 40 s slower and
+later edit-rebuild is unchanged. For a local debugging session with full DWARF
+run `CARGO_PROFILE_DEV_DEBUG=true cargo build` (or `npm start`); never commit it.
+
 ### Pre-commit hook (the test gate)
 
 There is no CI, so the tracked hook in `.githooks/pre-commit` is the mandatory
@@ -227,7 +238,7 @@ git config core.hooksPath .githooks
 ```
 
 It blocks the commit on any failure of: `cargo fmt --all --check`,
-`cargo clippy --all-targets --all-features -- -D warnings`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
 `cargo test --workspace` (includes the secret-leak guards, the log redaction
 guard `log_redaction_guard` and the SQL namespacing guard
 `sql_namespacing_guard`), the secret grep
@@ -344,7 +355,7 @@ for multicast. The real mDNS test is opt-in because it needs a
 multicast-capable interface:
 
 ```sh
-cargo test -p core --test discovery_lan -- --ignored
+cargo test -p core --test integration discovery_lan -- --ignored
 ```
 
 **Level 2** (two full app instances on one machine): `--profile <name>` or
@@ -416,14 +427,14 @@ Scope:
 - The containers exercise mDNS discovery and the ticket path over direct
   addresses. They run `--relay disabled`, so the
   **relay** path is not tested by Docker; it is covered by the Level-1
-  `core/tests/discovery_relay.rs`.
+  `core/tests/integration/discovery_relay.rs`.
 - The Docker bridge is not `internal: true`: mDNS needs the default route, so
   egress is open. Headless nodes always run with n0 internet lookup disabled
   (no n0 DNS/pkarr publishing or resolution); `--relay` is honored as given.
   The desktop app keeps internet lookup on.
 - Parity: the same trust-gate and presence scenarios run against in-process
-  nodes (`core/tests/discovery_parity.rs`) and against real headless processes
-  (`headless/tests/parity.rs`). Host processes use `--lan off` (loopback
+  nodes (`core/tests/integration/discovery_parity.rs`) and against real headless processes
+  (`headless/tests/integration/parity.rs`). Host processes use `--lan off` (loopback
   multicast is unreliable), so the presence scenario proves presence
   **persistence and dialability** at both levels. Presence **visibility** is
   checked by `docker/smoke.sh` stage 5 (and at Level 1 by `discovery_lan.rs`).

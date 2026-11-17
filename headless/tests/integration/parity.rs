@@ -1,6 +1,6 @@
 #![cfg(unix)]
 //! Level-3 run of the parity scenarios: the same code as
-//! `core/tests/discovery_parity.rs`, against real `messenger-headless`
+//! `core/tests/integration/discovery_parity.rs`, against real `messenger-headless`
 //! processes driven through the control socket.
 //!
 //! Scope: host processes run with `--lan off` because loopback multicast is

@@ -8,7 +8,7 @@
 //!
 //! **Never logged:** message bodies, search queries, display names and
 //! nicknames, the identity key, the database key and ticket strings.
-//! `core/tests/log_redaction_guard.rs` enforces this over every log call in
+//! `core/tests/integration/log_redaction_guard.rs` enforces this over every log call in
 //! the workspace; log calls use [`fields`] helpers, enums and counters only.
 //!
 //! Log files reveal who you connected to and when. Deleting the log folder is
