@@ -138,7 +138,8 @@ live in `messenger.db` in the (profile) data directory, encrypted with
 SQLCipher under the database key held in your OS keychain. The `storage` slice
 opens it, runs an integrity check, and applies forward-only, transactional
 schema migrations (messages, settings, contacts and the import bookkeeping are
-migrations 1 to 4). Nothing else on disk holds user data.
+migrations 1 to 6: messages, settings, contacts, import bookkeeping, theme and
+delivered time). Nothing else on disk holds user data.
 
 If the database cannot be opened (wrong or missing key, damaged file, newer
 schema, failed migration, or the file is missing while an identity exists), the
@@ -192,7 +193,12 @@ Deleting the log folder is a privacy action and is safe at any time.
 
 Open **Contacts**, then click a contact row. **Back** (or any tab) returns to the
 tabs; an "N unread" chip shows on the row while the chat is closed. Outgoing
-bubbles read "You"; incoming bubbles show *sent | received* times. The header
+bubbles read "You" and show *sent | delivered* times: both are this device's
+clock (hover titles "Sent (this device)" / "Delivered (this device)"); the
+delivered time is when the other device's acknowledgement arrived (it stored the
+message), not when it was read. Messages delivered before this version show only
+the sent time. The time is stored only in the encrypted `messenger.db` and never
+sent. Incoming bubbles show *sent | received* times. The header
 has Back, the name, the trust badge, the connection text and a ⋮ menu with
 **Contact info**.
 Commands: `chat_send`, `chat_resend`, `chat_history`, `history_search` and `history_clear`; events:
@@ -529,6 +535,12 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
     the edited not-connected sentence.
 40. A pending incoming request stays visible on every tab, in the chat and in
     contact info.
+41. Two instances connected: send from A; within a second A's bubble shows
+    *sent | delivered* (two times, the second titled "Delivered (this device)")
+    and the "Delivered" label; relaunch A: the same two times appear.
+42. Quit B and send from A: Pending, no delivered time. Relaunch B and Connect:
+    the delivered time appears and is later than the sent time. A message
+    delivered before upgrading shows only its sent time and "Delivered".
 
 ## Two-device simulation
 

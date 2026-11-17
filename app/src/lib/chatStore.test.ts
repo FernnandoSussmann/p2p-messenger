@@ -28,11 +28,12 @@ const mk = (o: Partial<MessageDto> = {}): MessageDto => {
   n++;
   return {
     node_id: A, id: `id${n}`, seq: n, cursor: `c${n}`, direction: "in", body: `m${n}`,
-    sent_at_ms: 1000 + n, received_at_ms: 1000 + n, status: "received", ...o,
+    sent_at_ms: 1000 + n, received_at_ms: 1000 + n, delivered_at_ms: null, status: "received", ...o,
   };
 };
 const ids = () => get(conversation)!.messages.map((m) => m.id);
 const status = (id: string) => get(conversation)!.messages.find((m) => m.id === id)!.status;
+const deliveredAt = (id: string) => get(conversation)!.messages.find((m) => m.id === id)!.delivered_at_ms;
 const emit = (name: string, payload: unknown) => handlers[name]({ payload });
 const page = (messages: MessageDto[], next: string | null = null) =>
   vi.mocked(chatHistory).mockResolvedValueOnce({ messages, next_before: next });
@@ -98,7 +99,7 @@ describe("chatStore", () => {
   });
 
   it("status_event_updates_message", async () => {
-    const x = mk({ direction: "out", status: "sending" });
+    const x = mk({ direction: "out", status: "sending", delivered_at_ms: null });
     page([x]);
     await openChat(A);
     emit("message_status", { node_id: A, id: x.id, status: "pending" });
@@ -110,7 +111,7 @@ describe("chatStore", () => {
   it("status_event_before_send_reply_is_applied", async () => {
     page([]);
     await openChat(A);
-    const sent = mk({ direction: "out", status: "sending" });
+    const sent = mk({ direction: "out", status: "sending", delivered_at_ms: null });
     let resolve!: (m: MessageDto) => void;
     vi.mocked(chatSend).mockReturnValueOnce(new Promise((r) => (resolve = r)));
     const p = sendMessage("hi");
@@ -121,7 +122,7 @@ describe("chatStore", () => {
   });
 
   it("page_load_never_downgrades_delivered", async () => {
-    const x = mk({ direction: "out", status: "sending" });
+    const x = mk({ direction: "out", status: "sending", delivered_at_ms: null });
     page([x]);
     await openChat(A);
     emit("message_status", { node_id: A, id: x.id, status: "delivered" });
@@ -142,6 +143,84 @@ describe("chatStore", () => {
     page([x]);
     await openChat(A);
     expect(status(x.id)).toBe("delivered");
+  });
+
+  it("status_event_sets_delivered_time", async () => {
+    const x = mk({ direction: "out", status: "sending" });
+    page([x]);
+    await openChat(A);
+    emit("message_status", { node_id: A, id: x.id, status: "delivered", delivered_at_ms: 5000 });
+    expect(status(x.id)).toBe("delivered");
+    expect(deliveredAt(x.id)).toBe(5000);
+  });
+
+  it("page_load_with_null_does_not_clear_delivered_time", async () => {
+    const x = mk({ direction: "out", status: "sending" });
+    page([x]);
+    await openChat(A);
+    emit("message_status", { node_id: A, id: x.id, status: "delivered", delivered_at_ms: 5000 });
+    page([{ ...x, status: "pending", delivered_at_ms: null }]);
+    emit("chat_resync", null);
+    await vi.waitFor(() => expect(chatHistory).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(status(x.id)).toBe("delivered");
+    expect(deliveredAt(x.id)).toBe(5000);
+  });
+
+  it("buffered_status_applied_after_page_load_keeps_time", async () => {
+    const x = mk({ direction: "out", status: "pending" });
+    page([]);
+    await openChat(A);
+    emit("message_status", { node_id: A, id: x.id, status: "delivered", delivered_at_ms: 7000 });
+    closeChat();
+    page([x]);
+    await openChat(A);
+    expect(deliveredAt(x.id)).toBe(7000);
+
+    const y = mk({ direction: "out", status: "pending" });
+    closeChat();
+    let resolve!: (p: { messages: MessageDto[]; next_before: string | null }) => void;
+    vi.mocked(chatHistory).mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const p = openChat(A);
+    emit("message_status", { node_id: A, id: y.id, status: "delivered", delivered_at_ms: 8000 });
+    resolve({ messages: [y], next_before: null });
+    await p;
+    expect(status(y.id)).toBe("delivered");
+    expect(deliveredAt(y.id)).toBe(8000);
+  });
+
+  it("second_status_event_never_replaces_first_time", async () => {
+    const x = mk({ direction: "out", status: "sending" });
+    page([x]);
+    await openChat(A);
+    emit("message_status", { node_id: A, id: x.id, status: "delivered", delivered_at_ms: 5000 });
+    emit("message_status", { node_id: A, id: x.id, status: "delivered", delivered_at_ms: 9000 });
+    expect(deliveredAt(x.id)).toBe(5000);
+  });
+
+  it("status_event_before_send_reply_keeps_time", async () => {
+    page([]);
+    await openChat(A);
+    const sent = mk({ direction: "out", status: "sending" });
+    let resolve!: (m: MessageDto) => void;
+    vi.mocked(chatSend).mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const p = sendMessage("hi");
+    emit("message_status", { node_id: A, id: sent.id, status: "delivered", delivered_at_ms: 6000 });
+    resolve(sent);
+    await p;
+    expect(deliveredAt(sent.id)).toBe(6000);
+  });
+
+  it("resend_reply_with_null_does_not_clear_time", async () => {
+    const x = mk({ direction: "out", status: "sending" });
+    page([x]);
+    await openChat(A);
+    emit("message_status", { node_id: A, id: x.id, status: "delivered", delivered_at_ms: 5000 });
+    vi.mocked(chatResend).mockResolvedValue({ node_id: A, id: x.id, status: "sending", delivered_at_ms: null });
+    await resendMessage(x.id);
+    expect(status(x.id)).toBe("delivered");
+    expect(deliveredAt(x.id)).toBe(5000);
   });
 
   it("pending_status_map_is_bounded", async () => {
@@ -203,7 +282,7 @@ describe("chatStore", () => {
     const x = mk({ direction: "out", status: "failed" });
     page([x]);
     await openChat(A);
-    vi.mocked(chatResend).mockResolvedValue({ node_id: A, id: x.id, status: "sending" });
+    vi.mocked(chatResend).mockResolvedValue({ node_id: A, id: x.id, status: "sending", delivered_at_ms: null });
     await resendMessage(x.id);
     expect(chatResend).toHaveBeenCalledWith(A, x.id);
     expect(status(x.id)).toBe("sending");

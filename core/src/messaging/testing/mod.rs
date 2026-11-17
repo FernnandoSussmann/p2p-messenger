@@ -124,6 +124,7 @@ fn stored(
         received_at_ms,
         body: msg.body.clone(),
         status,
+        delivered_at_ms: None,
     }
 }
 
@@ -176,7 +177,7 @@ impl MessageStore for MemoryMessageStore {
         id: &MessageId,
         status: MessageStatus,
     ) -> Result<bool, MessageStoreError> {
-        if status == MessageStatus::Received {
+        if matches!(status, MessageStatus::Received | MessageStatus::Delivered) {
             return Err(MessageStoreError::InvalidQuery);
         }
         let mut inner = self.lock()?;
@@ -188,6 +189,26 @@ impl MessageStore for MemoryMessageStore {
             return Ok(false);
         }
         row.status = status;
+        Ok(true)
+    }
+
+    fn mark_delivered(
+        &self,
+        account: &AccountId,
+        peer: &NodeId,
+        id: &MessageId,
+        delivered_at_ms: i64,
+    ) -> Result<bool, MessageStoreError> {
+        let mut inner = self.lock()?;
+        let Some(i) = inner.find(account, peer, id) else {
+            return Ok(false);
+        };
+        let row = &mut inner.rows[i].1;
+        if row.direction != MessageDirection::Outgoing || row.status == MessageStatus::Delivered {
+            return Ok(false);
+        }
+        row.status = MessageStatus::Delivered;
+        row.delivered_at_ms = Some(delivered_at_ms);
         Ok(true)
     }
 
@@ -315,6 +336,16 @@ impl MessageStore for FailingMessageStore {
         Err(MessageStoreError::Unavailable)
     }
 
+    fn mark_delivered(
+        &self,
+        _: &AccountId,
+        _: &NodeId,
+        _: &MessageId,
+        _: i64,
+    ) -> Result<bool, MessageStoreError> {
+        Err(MessageStoreError::Unavailable)
+    }
+
     fn get(
         &self,
         _: &AccountId,
@@ -389,6 +420,7 @@ mod tests {
         assert!(s
             .set_status(&a, &p, &msg.id, MessageStatus::Failed)
             .is_err());
+        assert!(s.mark_delivered(&a, &p, &msg.id, 1).is_err());
         assert!(s.erase_peer_history(&a, &p).is_err());
     }
 }

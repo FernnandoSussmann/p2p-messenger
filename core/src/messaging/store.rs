@@ -36,15 +36,28 @@ pub trait MessageStore: HistoryEraser {
         received_at_ms: i64,
     ) -> Result<Insert, MessageStoreError>;
 
-    /// Outgoing rows only. Delivered is terminal (never overwritten). `Received`
-    /// is refused with `InvalidQuery`. `Ok(false)` if there is no such row, it is
-    /// not outgoing, or it is already Delivered.
+    /// Outgoing rows only. `Delivered` and `Received` are refused with
+    /// `InvalidQuery` (Delivered goes through `mark_delivered`). Delivered is
+    /// terminal. `Ok(false)` if there is no such row, it is not outgoing, or it is
+    /// already Delivered.
     fn set_status(
         &self,
         account: &AccountId,
         peer: &NodeId,
         id: &protocol::MessageId,
         status: MessageStatus,
+    ) -> Result<bool, MessageStoreError>;
+
+    /// Sets status Delivered and `delivered_at_ms` together, in one update, on an
+    /// outgoing row that is not yet Delivered. `Ok(false)` (nothing changes) for a
+    /// missing row, an incoming row or an already-Delivered row, so the first
+    /// recorded time is never moved.
+    fn mark_delivered(
+        &self,
+        account: &AccountId,
+        peer: &NodeId,
+        id: &protocol::MessageId,
+        delivered_at_ms: i64,
     ) -> Result<bool, MessageStoreError>;
 
     fn get(

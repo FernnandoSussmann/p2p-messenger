@@ -26,6 +26,7 @@ pub struct MessageDto {
     pub body: String,
     pub sent_at_ms: i64,
     pub received_at_ms: Option<i64>,
+    pub delivered_at_ms: Option<i64>,
     pub status: &'static str,
 }
 
@@ -34,6 +35,7 @@ pub struct MessageStatusDto {
     pub node_id: String,
     pub id: String,
     pub status: &'static str,
+    pub delivered_at_ms: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -56,6 +58,7 @@ impl From<&StoredMessage> for MessageDto {
             body: neutralize_chat_text(&row.body),
             sent_at_ms: row.sent_at_ms,
             received_at_ms: row.received_at_ms,
+            delivered_at_ms: row.delivered_at_ms,
             status: row.status.as_str(),
         }
     }
@@ -75,11 +78,13 @@ impl MessageStatusDto {
         peer: &crate::identity::NodeId,
         id: &protocol::MessageId,
         status: MessageStatus,
+        delivered_at_ms: Option<i64>,
     ) -> Self {
         Self {
             node_id: peer.to_string(),
             id: id.to_string(),
             status: status.as_str(),
+            delivered_at_ms,
         }
     }
 }
@@ -98,6 +103,7 @@ impl fmt::Debug for MessageDto {
             )
             .field("sent_at_ms", &self.sent_at_ms)
             .field("received_at_ms", &self.received_at_ms)
+            .field("delivered_at_ms", &self.delivered_at_ms)
             .field("status", &self.status)
             .finish()
     }
@@ -119,9 +125,14 @@ pub fn chat_event_json(ev: &ChatEvent) -> (&'static str, Value) {
             MESSAGE_RECEIVED,
             serde_json::to_value(MessageDto::from(row)).expect("dto serializes"),
         ),
-        ChatEvent::Status { peer, id, status } => (
+        ChatEvent::Status {
+            peer,
+            id,
+            status,
+            delivered_at_ms,
+        } => (
             MESSAGE_STATUS,
-            json!(MessageStatusDto::new(peer, id, *status)),
+            json!(MessageStatusDto::new(peer, id, *status, *delivered_at_ms)),
         ),
     }
 }
@@ -142,6 +153,7 @@ mod tests {
             received_at_ms: Some(2_000),
             body: body.to_owned(),
             status: MessageStatus::Received,
+            delivered_at_ms: None,
         }
     }
 
@@ -154,7 +166,8 @@ mod tests {
             json!({
                 "node_id": r.peer.to_string(), "id": r.id.to_string(), "seq": 3,
                 "cursor": "1000:3", "direction": "in", "body": "hi",
-                "sent_at_ms": 1000, "received_at_ms": 2000, "status": "received",
+                "sent_at_ms": 1000, "received_at_ms": 2000, "delivered_at_ms": null,
+                "status": "received",
             })
         );
         let mut out = r;
@@ -164,7 +177,12 @@ mod tests {
         let v = serde_json::to_value(MessageDto::from(&out)).unwrap();
         assert_eq!(v["direction"], "out");
         assert_eq!(v["received_at_ms"], Value::Null);
+        assert_eq!(v["delivered_at_ms"], Value::Null);
         assert_eq!(v["status"], "pending");
+        out.status = MessageStatus::Delivered;
+        out.delivered_at_ms = Some(3_000);
+        let v = serde_json::to_value(MessageDto::from(&out)).unwrap();
+        assert_eq!(v["delivered_at_ms"], 3000);
     }
 
     #[test]
@@ -187,10 +205,15 @@ mod tests {
     #[test]
     fn message_status_dto_json_shape() {
         let r = row("a");
-        let dto = MessageStatusDto::new(&r.peer, &r.id, MessageStatus::Delivered);
+        let dto = MessageStatusDto::new(&r.peer, &r.id, MessageStatus::Delivered, Some(5));
+        let none = MessageStatusDto::new(&r.peer, &r.id, MessageStatus::Sending, None);
+        assert_eq!(
+            serde_json::to_value(&none).unwrap()["delivered_at_ms"],
+            Value::Null
+        );
         assert_eq!(
             serde_json::to_value(&dto).unwrap(),
-            json!({"node_id": r.peer.to_string(), "id": r.id.to_string(), "status": "delivered"})
+            json!({"node_id": r.peer.to_string(), "id": r.id.to_string(), "status": "delivered", "delivered_at_ms": 5})
         );
     }
 
@@ -204,9 +227,18 @@ mod tests {
             peer: r.peer,
             id: r.id,
             status: MessageStatus::Failed,
+            delivered_at_ms: None,
         });
         assert_eq!(name, "message_status");
         assert_eq!(v["status"], "failed");
+        assert_eq!(v["delivered_at_ms"], Value::Null);
+        let (_, v) = chat_event_json(&ChatEvent::Status {
+            peer: r.peer,
+            id: r.id,
+            status: MessageStatus::Delivered,
+            delivered_at_ms: Some(9),
+        });
+        assert_eq!(v["delivered_at_ms"], 9);
         assert_eq!(CHAT_RESYNC, "chat_resync");
     }
 
@@ -226,5 +258,6 @@ mod tests {
         let shown = format!("{:?} {:?}", dto, dto.messages[0]);
         assert!(!shown.contains("top secret"));
         assert!(shown.contains("redacted"));
+        assert!(shown.contains("delivered_at_ms"));
     }
 }

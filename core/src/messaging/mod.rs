@@ -6,7 +6,8 @@
 //!   Sending, then Delivered or Pending, then Failed. Messaging never dials:
 //!   re-establishing a channel is discovery's job.
 //! - **Storage.** [`MessageStore`] is backed by one encrypted `messages` table;
-//!   the table lives in `storage`'s single DB as migration 1.
+//!   the table lives in `storage`'s single DB as migration 1, and migration 6
+//!   adds `delivered_at_ms`.
 //! - **Bodies live only inside the SQLCipher file**, and every row and every
 //!   query is scoped by `account_id`.
 //! - **Dedupe is a storage invariant**: `UNIQUE(account_id, peer, message_id)`.
@@ -50,7 +51,7 @@ pub use model::{
 pub use protocol::{MessageId, MAX_BODY_BYTES};
 pub use service::{Messaging, MessagingDeps, SendError};
 pub use sqlcipher::SqlCipherMessageStore;
-pub(crate) use sqlcipher::MIGRATION_MESSAGES_V1;
+pub(crate) use sqlcipher::{MIGRATION_MESSAGES_DELIVERED_AT, MIGRATION_MESSAGES_V1};
 pub use store::{
     history_page, HistoryPage, MessageStore, DEFAULT_PAGE, DEFAULT_SEARCH_RESULTS, MAX_PAGE,
     MAX_SEARCH_QUERY_CHARS, MAX_SEARCH_RESULTS,

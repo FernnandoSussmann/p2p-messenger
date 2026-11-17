@@ -29,7 +29,11 @@ screen.subscribe((s) => {
   if (s.kind === "tab") conversation.set(null);
 });
 
-const pendingStatus = new Map<string, MessageStatus>();
+interface PendingStatus {
+  status: MessageStatus;
+  delivered_at_ms: number | null;
+}
+const pendingStatus = new Map<string, PendingStatus>();
 let inflight = 0;
 
 const compare = (a: MessageDto, b: MessageDto) => a.sent_at_ms - b.sent_at_ms || a.seq - b.seq;
@@ -38,9 +42,13 @@ function mergeStatus(current: MessageStatus, incoming: MessageStatus): MessageSt
   return current === "delivered" || incoming === "delivered" ? "delivered" : incoming;
 }
 
-function rememberStatus(id: string, status: MessageStatus) {
+const firstTime = (...values: (number | null | undefined)[]): number | null =>
+  values.find((v): v is number => typeof v === "number") ?? null;
+
+function rememberStatus(id: string, status: MessageStatus, deliveredAt: number | null) {
+  const prev = pendingStatus.get(id);
   pendingStatus.delete(id);
-  pendingStatus.set(id, status);
+  pendingStatus.set(id, { status, delivered_at_ms: firstTime(prev?.delivered_at_ms, deliveredAt) });
   while (pendingStatus.size > MAX_PENDING_STATUS) {
     pendingStatus.delete(pendingStatus.keys().next().value as string);
   }
@@ -50,10 +58,11 @@ function withPending(dto: MessageDto, existing?: MessageDto): MessageDto {
   let status = existing ? mergeStatus(existing.status, dto.status) : dto.status;
   const pending = pendingStatus.get(dto.id);
   if (pending !== undefined) {
-    status = mergeStatus(status, pending);
+    status = mergeStatus(status, pending.status);
     pendingStatus.delete(dto.id);
   }
-  return { ...dto, status };
+  const delivered_at_ms = firstTime(existing?.delivered_at_ms, pending?.delivered_at_ms, dto.delivered_at_ms);
+  return { ...dto, status, delivered_at_ms };
 }
 
 function capped(c: Conversation): Conversation {
@@ -153,13 +162,18 @@ function applyStatus(ev: MessageStatusDto) {
   const cur = get(conversation);
   const idx = cur && cur.nodeId === ev.node_id ? cur.messages.findIndex((m) => m.id === ev.id) : -1;
   if (idx < 0) {
-    rememberStatus(ev.id, ev.status);
+    rememberStatus(ev.id, ev.status, ev.delivered_at_ms ?? null);
     return;
   }
-  if (inflight > 0) rememberStatus(ev.id, ev.status);
+  if (inflight > 0) rememberStatus(ev.id, ev.status, ev.delivered_at_ms ?? null);
   updateOpen(ev.node_id, (c) => {
     const messages = [...c.messages];
-    messages[idx] = { ...messages[idx], status: mergeStatus(messages[idx].status, ev.status) };
+    const m = messages[idx];
+    messages[idx] = {
+      ...m,
+      status: mergeStatus(m.status, ev.status),
+      delivered_at_ms: firstTime(m.delivered_at_ms, ev.delivered_at_ms),
+    };
     return { ...c, messages };
   });
 }

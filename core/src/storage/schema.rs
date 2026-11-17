@@ -27,7 +27,12 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         label: "settings_theme",
         sql: crate::identity::MIGRATION_SETTINGS_THEME,
     },
+    Migration {
+        version: 6,
+        label: "messages_delivered_at",
+        sql: crate::messaging::MIGRATION_MESSAGES_DELIVERED_AT,
+    },
 ];
 
 /// Must equal `MIGRATIONS.last().version` (unit-tested).
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;

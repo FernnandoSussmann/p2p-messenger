@@ -117,7 +117,30 @@ impl Inner {
             .store_call(move |s, a| s.set_status(a, &peer, &id, status))
             .await
         {
-            Ok(true) => self.emit(ChatEvent::Status { peer, id, status }),
+            Ok(true) => self.emit(ChatEvent::Status {
+                peer,
+                id,
+                status,
+                delivered_at_ms: None,
+            }),
+            Ok(false) => {}
+            Err(e) => tracing::debug!(peer = %peer.fmt_short(), error = ?e, "status not persisted"),
+        }
+    }
+
+    /// Marks an acked message Delivered at `at_ms` (this device's clock) and
+    /// emits it, only if the row changed.
+    pub async fn persist_delivered(&self, peer: NodeId, id: MessageId, at_ms: i64) {
+        match self
+            .store_call(move |s, a| s.mark_delivered(a, &peer, &id, at_ms))
+            .await
+        {
+            Ok(true) => self.emit(ChatEvent::Status {
+                peer,
+                id,
+                status: MessageStatus::Delivered,
+                delivered_at_ms: Some(at_ms),
+            }),
             Ok(false) => {}
             Err(e) => tracing::debug!(peer = %peer.fmt_short(), error = ?e, "status not persisted"),
         }

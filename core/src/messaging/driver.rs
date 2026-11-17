@@ -7,7 +7,7 @@ use protocol::{ChatMessage, MessageId, MAX_ACK_BYTES};
 use tokio::time::{sleep, sleep_until, timeout, Instant};
 
 use super::codec::{decode_ack, encode_chat};
-use super::engine::Inner;
+use super::engine::{now_ms, Inner};
 use super::MessageStatus;
 use crate::discovery::Channel;
 use crate::identity::NodeId;
@@ -124,10 +124,9 @@ async fn finish(inner: &Inner, peer: NodeId, id: MessageId, outcome: Outcome) {
     let backoff_base = inner.config.backoff_base;
     match outcome {
         Outcome::Acked => {
+            let at = now_ms();
             inner.state().outbox.remove(&peer, &id);
-            inner
-                .persist_status(peer, id, MessageStatus::Delivered)
-                .await;
+            inner.persist_delivered(peer, id, at).await;
         }
         Outcome::NoAck => {
             let mut attempts = None;

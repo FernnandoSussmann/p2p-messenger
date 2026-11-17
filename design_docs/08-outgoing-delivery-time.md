@@ -1,7 +1,7 @@
 # DD-08 — Outgoing Delivery Time
 
 **Feature slice:** `core::messaging` (store, engine, events, DTOs) + `app` (chat commands' DTOs, chat store, outgoing bubble)
-**Status:** Draft
+**Status:** Implemented (see Implementation notes)
 **Affected:** `core/src/messaging/` (`sqlcipher.rs` migration SQL and queries, `store.rs` trait, `testing/` memory store,
 `contract.rs`, `driver.rs` / `engine.rs` ack path, `events.rs`, `dto.rs`, `model.rs`), `core/src/storage/schema.rs` (one new
 migration), `app/src-tauri/src/chat_cmd.rs`, `app/src/lib/chatStore.ts`, `app/src/views/MessageBubble.svelte`, their tests,
@@ -232,15 +232,26 @@ Manual (README checklist):
 
 ## Definition of done
 
-- [ ] Migration adds `messages.delivered_at_ms` (nullable, outgoing-only); schema version and
+- [x] Migration adds `messages.delivered_at_ms` (nullable, outgoing-only); schema version and
       migration registry updated.
-- [ ] `mark_delivered` added; `set_status` refuses Delivered; `StoredMessage` and all queries carry
+- [x] `mark_delivered` added; `set_status` refuses Delivered; `StoredMessage` and all queries carry
       the new column; SQLCipher and memory stores pass the extended contract suite.
-- [ ] Driver records the time on the matching ack; `ChatEvent::Status`, `MessageStatusDto` and
+- [x] Driver records the time on the matching ack; `ChatEvent::Status`, `MessageStatusDto` and
       `MessageDto` carry `delivered_at_ms`.
-- [ ] `chatStore` merges the time without ever downgrading it; the outgoing bubble shows
+- [x] `chatStore` merges the time without ever downgrading it; the outgoing bubble shows
       *sent | delivered* with the two new tooltips, using only shared classes.
-- [ ] No wire change (`PROTOCOL_VERSION` untouched); no new log fields; all guards green.
-- [ ] All tests listed above added and green.
-- [ ] README: delivered time described in the messaging section and manual checklist.
-- [ ] Pre-commit hook passes.
+- [x] No wire change (`PROTOCOL_VERSION` untouched); no new log fields; all guards green.
+- [x] All tests listed above added and green.
+- [x] README: delivered time described in the messaging section and manual checklist.
+- [x] Pre-commit hook passes.
+
+## Implementation notes
+
+Decisions taken in the code:
+
+- `insert_outgoing` is unchanged (still accepts Delivered and Failed); only `set_status` refuses Delivered, so
+  fixtures can seed Delivered rows directly while new code can only reach Delivered through `mark_delivered`.
+- The outgoing-only `CHECK` on `messages.delivered_at_ms` was kept (SQLite accepted it on the existing table).
+- The bubble follows the text inventory: no visible "Sent" word, `<time> | <time>` then the unchanged status label,
+  using the existing `|` separator style. The delivered time shows only for status `delivered` with a valid time.
+- Step 08-03 audit found no gaps; no code fixes were needed.
