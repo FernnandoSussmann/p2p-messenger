@@ -72,6 +72,9 @@ pub struct StoredMessage {
     pub body: String,
     /// `Received` iff incoming (enforced in Rust).
     pub status: MessageStatus,
+    /// This device's clock when the matching `Ack` was processed. `Some` only for
+    /// outgoing rows that became Delivered after DD-08; never peer-supplied.
+    pub delivered_at_ms: Option<i64>,
 }
 
 impl fmt::Debug for StoredMessage {
@@ -88,6 +91,7 @@ impl fmt::Debug for StoredMessage {
                 &format_args!("<redacted, {} bytes>", self.body.len()),
             )
             .field("status", &self.status)
+            .field("delivered_at_ms", &self.delivered_at_ms)
             .finish()
     }
 }
@@ -209,10 +213,12 @@ mod tests {
             received_at_ms: Some(3),
             body: format!("canary-{}", new_message_id()),
             status: MessageStatus::Received,
+            delivered_at_ms: None,
         };
         let shown = format!("{row:?}");
         assert!(!shown.contains(&row.body));
         assert!(shown.contains(&format!("<redacted, {} bytes>", row.body.len())));
+        assert!(shown.contains("delivered_at_ms"));
     }
 
     #[test]

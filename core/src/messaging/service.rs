@@ -153,7 +153,12 @@ impl Messaging {
                 });
             }
         }
-        inner.emit(ChatEvent::Status { peer, id, status });
+        inner.emit(ChatEvent::Status {
+            peer,
+            id,
+            status,
+            delivered_at_ms: None,
+        });
         let msg = ChatMessage {
             id: row.id,
             sent_at_ms: row.sent_at_ms,

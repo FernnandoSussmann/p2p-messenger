@@ -78,10 +78,44 @@ fn reopen_with_same_key_reads_rows() {
     };
     let store = open(&dir, &k);
     assert_eq!(store.page(&account, &peer, None, 10).unwrap(), vec![row]);
+    assert!(store
+        .mark_delivered(
+            &account,
+            &peer,
+            &store.page(&account, &peer, None, 1).unwrap()[0].id,
+            42
+        )
+        .unwrap());
+    drop(store);
+    let store = open(&dir, &k);
+    let again = store.page(&account, &peer, None, 10).unwrap();
+    assert_eq!(again[0].delivered_at_ms, Some(42));
+    assert_eq!(again[0].status, MessageStatus::Delivered);
     assert_eq!(
         store.search(&account, None, "persisted", 10).unwrap().len(),
         1
     );
+}
+
+#[test]
+fn delivered_at_check_rejects_incoming_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, account, peer) = (open(&dir, &key()), AccountId::new(), node());
+    store
+        .insert_incoming(&account, &peer, &chat(1, "in"), 2)
+        .unwrap();
+    let err = store
+        .conn()
+        .unwrap()
+        .execute(
+            "UPDATE messages SET delivered_at_ms = 1 WHERE direction = 'in'",
+            [],
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        rusqlite::Error::SqliteFailure(e, _) if e.code == rusqlite::ErrorCode::ConstraintViolation
+    ));
 }
 
 #[test]

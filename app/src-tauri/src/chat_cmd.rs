@@ -202,7 +202,7 @@ pub async fn resend(
     let id = parse_message_id(message_id).ok_or(ChatCmdError::InvalidMessageId)?;
     let messaging = chat.messaging()?;
     let status = messaging.resend(peer, id).await?;
-    Ok(MessageStatusDto::new(&peer, &id, status))
+    Ok(MessageStatusDto::new(&peer, &id, status, None))
 }
 
 pub async fn history(

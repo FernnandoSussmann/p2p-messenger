@@ -244,6 +244,65 @@ fn forward_migration_keeps_rows() {
 }
 
 #[test]
+fn delivered_at_migration_upgrades_v5_database() {
+    let (dir, keychain, account, k) = installed();
+    let p = iroh::SecretKey::generate().public();
+    let db = open_with(&dir, &k, &MIGRATIONS[..5]).unwrap();
+    assert_eq!(user_version(&db), 5);
+    let ids: Vec<_> = (0..3).map(|_| uuid::Uuid::new_v4()).collect();
+    for (n, (id, direction, status)) in [
+        (ids[0], "out", "delivered"),
+        (ids[1], "out", "pending"),
+        (ids[2], "in", "received"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO messages (account_id, peer, message_id, direction, sent_at_ms, received_at_ms, body, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'old', ?7)",
+                rusqlite::params![
+                    account.as_uuid().as_bytes().as_slice(),
+                    p.to_string(),
+                    id.as_bytes().as_slice(),
+                    direction,
+                    i64::try_from(n).unwrap(),
+                    (direction == "in").then_some(9i64),
+                    status,
+                ],
+            )
+            .unwrap();
+    }
+    drop(db);
+
+    let db = open(&dir, &k);
+    assert_eq!(user_version(&db), 6);
+    drop(db);
+    let storage = Storage::new(dir.path(), keychain);
+    let store = SqlCipherMessageStore::new(storage.database(&account).unwrap());
+    let rows = store.page(&account, &p, None, 10).unwrap();
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(|r| r.delivered_at_ms.is_none()));
+    let status_of = |id: uuid::Uuid| {
+        rows.iter()
+            .find(|r| r.id.as_bytes() == id.as_bytes())
+            .unwrap()
+            .status
+    };
+    assert_eq!(status_of(ids[0]), MessageStatus::Delivered);
+    assert_eq!(status_of(ids[1]), MessageStatus::Pending);
+    assert_eq!(status_of(ids[2]), MessageStatus::Received);
+    let pending = rows
+        .iter()
+        .find(|r| r.status == MessageStatus::Pending)
+        .unwrap();
+    assert!(store.mark_delivered(&account, &p, &pending.id, 77).unwrap());
+    let got = store.get(&account, &p, &pending.id).unwrap().unwrap();
+    assert_eq!(got.delivered_at_ms, Some(77));
+}
+
+#[test]
 fn theme_migration_upgrades_v4_database() {
     use crate::identity::{
         IdentityService, NodeIdTicketProvider, SettingsStore, SqlCipherSettingsStore, Theme,
@@ -261,7 +320,7 @@ fn theme_migration_upgrades_v4_database() {
     drop(db);
 
     let db = open(&dir, &k);
-    assert_eq!(user_version(&db), 5);
+    assert_eq!(user_version(&db), SCHEMA_VERSION);
     let theme: Option<String> = db
         .conn()
         .unwrap()
@@ -392,6 +451,7 @@ fn dd04_database_opens_unchanged() {
     let rows = store.page(&account, &p, None, 10).unwrap();
     assert_eq!(rows.len(), 5);
     assert!(rows.iter().all(|r| r.status == MessageStatus::Delivered));
+    assert!(rows.iter().all(|r| r.delivered_at_ms.is_none()));
     assert_eq!(
         store
             .search(&account, None, "old message 3", 10)

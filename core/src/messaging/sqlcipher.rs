@@ -54,20 +54,26 @@ CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
   INSERT INTO messages_fts (messages_fts, rowid, body) VALUES ('delete', old.seq, old.body); END;
 ";
 
+pub(crate) const MIGRATION_MESSAGES_DELIVERED_AT: &str = "
+ALTER TABLE messages ADD COLUMN delivered_at_ms INTEGER
+  CHECK (delivered_at_ms IS NULL OR direction = 'out');
+";
+
 macro_rules! cols {
     () => {
-        "seq, peer, message_id, direction, sent_at_ms, received_at_ms, body, status"
+        "seq, peer, message_id, direction, sent_at_ms, received_at_ms, body, status, delivered_at_ms"
     };
 }
 
 macro_rules! cols_m {
     () => {
-        "m.seq, m.peer, m.message_id, m.direction, m.sent_at_ms, m.received_at_ms, m.body, m.status"
+        "m.seq, m.peer, m.message_id, m.direction, m.sent_at_ms, m.received_at_ms, m.body, m.status, m.delivered_at_ms"
     };
 }
 
 const SQL_INSERT_OUT: &str = "INSERT INTO messages (account_id, peer, message_id, direction, sent_at_ms, received_at_ms, body, status) VALUES (?1, ?2, ?3, 'out', ?4, NULL, ?5, ?6)";
 const SQL_INSERT_IN: &str = "INSERT INTO messages (account_id, peer, message_id, direction, sent_at_ms, received_at_ms, body, status) VALUES (?1, ?2, ?3, 'in', ?4, ?5, ?6, 'received') ON CONFLICT (account_id, peer, message_id) DO NOTHING";
+const SQL_MARK_DELIVERED: &str = "UPDATE messages SET status = 'delivered', delivered_at_ms = ?4 WHERE account_id = ?1 AND peer = ?2 AND message_id = ?3 AND direction = 'out' AND status <> 'delivered'";
 const SQL_SET_STATUS: &str = "UPDATE messages SET status = ?4 WHERE account_id = ?1 AND peer = ?2 AND message_id = ?3 AND direction = 'out' AND status <> 'delivered'";
 const SQL_GET: &str = concat!(
     "SELECT ",
@@ -128,6 +134,7 @@ type Raw = (
     Option<i64>,
     String,
     String,
+    Option<i64>,
 );
 
 fn read_raw(r: &Row<'_>) -> rusqlite::Result<Raw> {
@@ -140,12 +147,13 @@ fn read_raw(r: &Row<'_>) -> rusqlite::Result<Raw> {
         r.get(5)?,
         r.get(6)?,
         r.get(7)?,
+        r.get(8)?,
     ))
 }
 
 /// Any unreadable column is corruption, reported as `Unavailable`.
 fn into_stored(raw: Raw) -> Result<StoredMessage, MessageStoreError> {
-    let (seq, peer, id, direction, sent_at_ms, received_at_ms, body, status) = raw;
+    let (seq, peer, id, direction, sent_at_ms, received_at_ms, body, status, delivered_at_ms) = raw;
     let bad = MessageStoreError::Unavailable;
     Ok(StoredMessage {
         seq,
@@ -156,6 +164,7 @@ fn into_stored(raw: Raw) -> Result<StoredMessage, MessageStoreError> {
         received_at_ms,
         body,
         status: MessageStatus::parse(&status).ok_or(bad)?,
+        delivered_at_ms,
     })
 }
 
@@ -248,6 +257,7 @@ impl MessageStore for SqlCipherMessageStore {
             received_at_ms: None,
             body: msg.body.clone(),
             status,
+            delivered_at_ms: None,
         })
     }
 
@@ -285,6 +295,7 @@ impl MessageStore for SqlCipherMessageStore {
             received_at_ms: Some(received_at_ms),
             body: msg.body.clone(),
             status: MessageStatus::Received,
+            delivered_at_ms: None,
         }))
     }
 
@@ -295,7 +306,7 @@ impl MessageStore for SqlCipherMessageStore {
         id: &MessageId,
         status: MessageStatus,
     ) -> Result<bool, MessageStoreError> {
-        if status == MessageStatus::Received {
+        if matches!(status, MessageStatus::Received | MessageStatus::Delivered) {
             return Err(MessageStoreError::InvalidQuery);
         }
         let changed = self
@@ -307,6 +318,28 @@ impl MessageStore for SqlCipherMessageStore {
                     peer.to_string(),
                     id.as_bytes().as_slice(),
                     status.as_str(),
+                ],
+            )
+            .map_err(|_| MessageStoreError::Unavailable)?;
+        Ok(changed > 0)
+    }
+
+    fn mark_delivered(
+        &self,
+        account: &AccountId,
+        peer: &NodeId,
+        id: &MessageId,
+        delivered_at_ms: i64,
+    ) -> Result<bool, MessageStoreError> {
+        let changed = self
+            .conn()?
+            .execute(
+                SQL_MARK_DELIVERED,
+                params![
+                    account.as_uuid().as_bytes().as_slice(),
+                    peer.to_string(),
+                    id.as_bytes().as_slice(),
+                    delivered_at_ms,
                 ],
             )
             .map_err(|_| MessageStoreError::Unavailable)?;
