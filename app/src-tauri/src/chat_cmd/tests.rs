@@ -200,7 +200,19 @@ async fn chat_flow_end_to_end() {
 
     let sent = send(&a.chat, &b.id.to_string(), body.into()).await.unwrap();
     assert_eq!(sent.status, "sending");
+    assert_eq!(sent.delivered_at_ms, None);
     log_a.wait_status(&sent.id, "delivered").await;
+    let at = log_a
+        .named("message_status")
+        .iter()
+        .find(|v| v["id"] == sent.id.as_str() && v["status"] == "delivered")
+        .and_then(|v| v["delivered_at_ms"].as_i64())
+        .expect("delivered event carries a numeric time");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    assert!(sent.sent_at_ms <= at && i128::from(at) <= i128::try_from(now).unwrap());
 
     let deadline = tokio::time::Instant::now() + WAIT;
     while log_b.named("message_received").is_empty() {
@@ -220,6 +232,8 @@ async fn chat_flow_end_to_end() {
         .unwrap();
     assert_eq!(mine.messages.len(), 1);
     assert_eq!(mine.messages[0].direction, "out");
+    assert_eq!(mine.messages[0].delivered_at_ms, Some(at));
+    assert_eq!(theirs.messages[0].delivered_at_ms, None);
     assert_eq!(theirs.messages.len(), 1);
     assert_eq!(theirs.messages[0].direction, "in");
     assert_eq!(theirs.messages[0].body, body);
@@ -253,6 +267,7 @@ async fn resend_flow_via_command() {
     b.faults.drop_acks.store(0, Ordering::SeqCst);
     let status = resend(&a.chat, &b.id.to_string(), &sent.id).await.unwrap();
     assert_eq!(status.id, sent.id);
+    assert_eq!(status.delivered_at_ms, None);
     log_a.wait_status(&sent.id, "delivered").await;
 
     assert_eq!(
@@ -311,6 +326,7 @@ async fn history_paging_via_command() {
         .unwrap();
     assert_eq!(first.messages.len(), 50);
     assert_eq!(first.messages[0].body, "seed 10");
+    assert!(first.messages.iter().all(|m| m.delivered_at_ms.is_none()));
     assert_eq!(first.messages[49].body, "seed 59");
     let token = first.next_before.unwrap();
     assert_eq!(token, first.messages[0].cursor);
