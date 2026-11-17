@@ -1,9 +1,4 @@
 import { writable } from "svelte/store";
-import type { Component } from "svelte";
-import FirstRunWizard from "../views/FirstRunWizard.svelte";
-import Contacts from "../views/Contacts.svelte";
-import MyInfo from "../views/MyInfo.svelte";
-import Network from "../views/Network.svelte";
 
 export type AppView =
   | { kind: "loading" }
@@ -12,23 +7,20 @@ export type AppView =
   | { kind: "wizard" }
   | { kind: "main" };
 
-export type TabId = "contacts" | "my-info" | "network";
+export type TabId = "contacts" | "discover" | "network" | "my-info";
+export type Screen = { kind: "tab"; tab: TabId } | { kind: "chat"; nodeId: string };
 
-export interface Tab {
-  id: TabId;
-  label: string;
-  component: Component;
-}
+const HOME: Screen = { kind: "tab", tab: "contacts" };
 
 export const appView = writable<AppView>({ kind: "loading" });
-export const activeTab = writable<TabId>("contacts");
+export const screen = writable<Screen>(HOME);
 
-// FirstRunWizard receives `onDone` (see views/FirstRunWizard.svelte).
-export const wizardView: Component<{ onDone: () => void }> = FirstRunWizard;
+/** Selecting a tab also clears any drill-in screen. */
+export const showTab = (tab: TabId) => screen.set({ kind: "tab", tab });
+export const showChat = (nodeId: string) => screen.set({ kind: "chat", nodeId });
+export const resetScreen = () => screen.set(HOME);
 
-// Tabs rendered by MainScreen; each component takes no props.
-export const tabs: Tab[] = [
-  { id: "contacts", label: "Contacts", component: Contacts },
-  { id: "my-info", label: "My Info", component: MyInfo },
-  { id: "network", label: "Network", component: Network },
-];
+/** Back from a drill-in screen: chat returns to Contacts. */
+export function back(): void {
+  screen.set(HOME);
+}

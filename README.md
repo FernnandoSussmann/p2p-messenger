@@ -117,7 +117,7 @@ networking stays down until it opens. The file is never reset, deleted or
 recreated, and there is no "reset database" action. A missing file is
 recreated only during first-run provisioning or while importing legacy
 plaintext data. A first-run provisioning that fails removes only the empty
-database it just created, so running the wizard again works.
+database it just created, so running the setup screen again works.
 
 **Upgrading from the plaintext files.** Older versions kept `settings.json`,
 `contacts.json` and `known_peers.json` in the data directory. On the first
@@ -191,9 +191,9 @@ Commands: `chat_send`, `chat_resend`, `chat_history`, `history_search` and `hist
 
 ### On this network, presence and relay
 
-**Contacts → On this network** lists non-contact peers found via mDNS. Entries
+**Discover** lists non-contact peers found via mDNS. Entries
 are always marked **Unverified**: the name is self-asserted, only the NodeId
-counts. **Add…** asks for your nickname, saves the contact and connects; the
+counts. Type your nickname for the peer and press **Add contact and connect**; it saves the contact and connects; the
 other side gets the Accept/Decline prompt. Discovered peers are kept in memory
 only, never on disk.
 
@@ -399,12 +399,12 @@ flow is automated at command-invoke level (`first_run_flow_end_to_end` in
 (vitest). Check by
 hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 
-1. First launch shows the wizard; empty or whitespace names are rejected.
-2. A valid name lands on the main screen; relaunch skips the wizard.
+1. First launch shows the one-screen setup (name and theme); empty or whitespace names are rejected.
+2. A valid name lands on the main screen; relaunch skips the setup screen.
 3. My Info shows name, full NodeId, ticket and QR; both copy buttons paste
    exactly the ticket / NodeId. The theme (Midnight, Dark, Light) is chosen
    there too, stored per account in `messenger.db`, and survives a relaunch.
-4. Denying keychain access shows the blocking error screen, never the wizard.
+4. Denying keychain access shows the blocking error screen, never the setup screen.
 5. My Info shows the long live ticket (not just `p2pm:<nodeid>`); it updates
    shortly after launch once the relay connects.
 6. Paste it on a second device (Network tab): the receiver gets an
@@ -418,8 +418,8 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
    After upgrading a profile that has a `known_peers.json`, a previously
    accepted peer still connects without a prompt.
 9. Two instances (see Two-device simulation): each appears in the other's
-   Contacts → On this network list as Unverified, with its full NodeId. Add…
-   it: it becomes a contact, connects, and the other side gets the prompt.
+   Discover tab as Unverified, with its full NodeId. Type a nickname and press
+   Add contact and connect: it becomes a contact, connects, and the other side gets the prompt.
 10. Turn Visible on this network off: the peer disappears from the other
     list within seconds, the other still shows in yours, and a ticket connect
     to you still works. Turn it on: you reappear with your current name.
@@ -439,7 +439,7 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 17. The peer renames itself and reconnects: your nickname for them is unchanged.
 18. Reconnect silently: quit and relaunch both instances. On B, open Contacts;
     A's row shows Connect. Click it: A shows no Accept prompt and both show
-    Connected under Network → Connections. Repeat by pasting A's ticket into B's
+    Connected on A's contact row. Repeat by pasting A's ticket into B's
     Network tab, again with no prompt on A.
 19. `MESSENGER_PROFILE=../x` or `MESSENGER_RELAY_URL=bad` refuses to start.
 20. Contacts -> **Message** opens the chat. **Back**, or any tab, returns to the tabs.
@@ -512,7 +512,7 @@ cargo build -p app                                 # once, if target/debug/app i
 MESSENGER_PROFILE=b ./target/debug/app             # terminal 2: instance B
 ```
 
-Then: complete first-run on each, find the other in **Contacts → On this network**
+Then: complete first-run on each, find the other in **Discover**
 (or paste its ticket), Accept on the other side, see Connected, then turn
 **Visible on this network** off on one: it vanishes from the other's list but
 can still be connected to by ticket.

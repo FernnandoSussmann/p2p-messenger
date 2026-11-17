@@ -25,6 +25,7 @@
   let error = $state<string | null>(null);
 
   const lanTicket = $derived($lanPeers.find((p) => p.node_id === contact.node_id)?.ticket);
+  const conn = $derived($connections[contact.node_id]);
   const isConnected = $derived($connections[contact.node_id]?.state === "connected");
 
   async function connect() {
@@ -77,6 +78,7 @@
     <TrustBadge verified={contact.verified} />
     <strong class="nickname truncate" data-testid="contact-nickname"><bdi>{contact.nickname}</bdi></strong>
   </div>
+  <p class="muted" data-testid="contact-connection">{#if conn}<bdi>{conn.direction} | {conn.state}{conn.reason ? ` | ${conn.reason}` : ""}</bdi>{:else}Not connected{/if}</p>
   <NodeIdLine nodeId={contact.node_id} />
   <div class="row">
     <button type="button" class="btn btn-primary btn-sm" onclick={() => openChat(contact.node_id)}

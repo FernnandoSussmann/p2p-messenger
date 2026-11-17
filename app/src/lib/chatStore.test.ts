@@ -17,8 +17,9 @@ vi.mock("../chat", async (orig) => ({
 
 import { chatHistory, chatSend, chatResend, type MessageDto } from "../chat";
 import {
-  activeChat, closeChat, conversation, loadOlder, openChat, resendMessage, resetConversation, sendMessage, startChatEvents, unread,
+  closeChat, conversation, loadOlder, openChat, resendMessage, resetConversation, sendMessage, startChatEvents, unread,
 } from "./chatStore";
+import { screen, showTab } from "./router";
 
 const A = "a".repeat(64);
 const B = "b".repeat(64);
@@ -181,12 +182,20 @@ describe("chatStore", () => {
     expect(c.nextBefore).toBe(first[1].cursor);
   });
 
-  it("open_and_close_chat_set_activeChat", async () => {
+  it("open_and_close_chat_drive_the_screen", async () => {
     page([]);
     await openChat(A);
-    expect(get(activeChat)).toBe(A);
+    expect(get(screen)).toEqual({ kind: "chat", nodeId: A });
     closeChat();
-    expect(get(activeChat)).toBeNull();
+    expect(get(screen)).toEqual({ kind: "tab", tab: "contacts" });
+    expect(get(conversation)).toBeNull();
+  });
+
+  it("showing_a_tab_clears_the_open_conversation", async () => {
+    page([]);
+    await openChat(A);
+    expect(get(conversation)).not.toBeNull();
+    showTab("network");
     expect(get(conversation)).toBeNull();
   });
 

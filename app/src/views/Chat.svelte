@@ -95,7 +95,7 @@
 
 <section aria-label="Conversation">
   <header class="row">
-    <button type="button" class="btn btn-secondary btn-sm" onclick={onBack}>Back</button>
+    <button type="button" class="btn btn-secondary btn-sm" data-screen-focus onclick={onBack}>Back</button>
     <strong><bdi>{contact?.nickname ?? nodeId.slice(0, 8)}</bdi></strong>
     {#if contact}<TrustBadge verified={contact.verified} />{/if}
     <span class="muted" data-testid="connection-text">{connected ? "Connected" : "Not connected"}</span>

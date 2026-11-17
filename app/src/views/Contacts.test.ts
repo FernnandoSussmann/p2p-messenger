@@ -14,7 +14,6 @@ vi.mock("../lib/contactsStore", async () => {
     refreshContacts: vi.fn(async () => {}),
   };
 });
-vi.mock("./LanPeers.svelte", () => ({ default: () => {} }));
 
 import Contacts from "./Contacts.svelte";
 import { contactsRemove } from "../contacts";
@@ -35,10 +34,18 @@ describe("Contacts", () => {
     expect(screen.getAllByTestId("contact-nickname").map((e) => e.textContent)).toEqual(["Ann", "Bob"]);
   });
 
+  it("has no LAN list", () => {
+    render(Contacts);
+    expect(screen.queryByText("On this network")).toBeNull();
+  });
+
   it("shows the empty state with the three ways to add", () => {
     render(Contacts);
     const text = screen.getByText(/No contacts yet/).textContent!.replace(/\s+/g, " ");
-    expect(text).toContain("On this network");
+    expect(text).toBe(
+      "No contacts yet. Add someone from Discover, connect with a ticket in the Network tab, or accept an incoming request.",
+    );
+    expect(screen.getByText("Discover").tagName).toBe("EM");
     expect(text).toContain("ticket in the Network tab");
     expect(text).toContain("accept an incoming request");
   });

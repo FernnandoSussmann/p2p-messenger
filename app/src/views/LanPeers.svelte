@@ -8,16 +8,10 @@
   import NodeIdLine from "./NodeIdLine.svelte";
   import TrustBadge from "./TrustBadge.svelte";
 
-  let adding = $state<string | null>(null);
   let busy = $state(false);
   let error = $state<string | null>(null);
 
   const others = $derived($lanPeers.filter((p) => !$contactIds.has(p.node_id)));
-
-  function open(id: string) {
-    adding = id;
-    error = null;
-  }
 
   async function add(peer: LanPeerDto, nickname: string) {
     error = null;
@@ -30,7 +24,6 @@
         return;
       }
       await refreshContacts();
-      adding = null;
       try {
         await netConnectTicket(peer.ticket);
       } catch (e) {
@@ -50,20 +43,18 @@
   {:else}
     <ul class="list">
       {#each others as peer (peer.node_id)}
-        <li class="stack" data-testid="lan-peer">
-          <TrustBadge verified={false} />
-          {#if peer.display_name}calls themselves “<bdi data-testid="lan-peer-name">{peer.display_name}</bdi>”{:else}<span data-testid="lan-peer-name">(no name)</span>{/if}
+        <li class="stack lan-peer" data-testid="lan-peer">
+          <div class="row">
+            <TrustBadge verified={false} />
+            <span class="grow">{#if peer.display_name}calls themselves “<bdi data-testid="lan-peer-name">{peer.display_name}</bdi>”{:else}<span data-testid="lan-peer-name">(no name)</span>{/if}</span>
+          </div>
+          <NicknameForm
+            selfName={peer.display_name}
+            submitLabel="Add contact and connect"
+            {busy}
+            onSubmit={(n) => add(peer, n)}
+          />
           <NodeIdLine nodeId={peer.node_id} />
-          <button type="button" class="btn btn-secondary btn-sm" disabled={busy} onclick={() => open(peer.node_id)}>Add…</button>
-          {#if adding === peer.node_id}
-            <NicknameForm
-              selfName={peer.display_name}
-              submitLabel="Add contact and connect"
-              {busy}
-              onSubmit={(n) => add(peer, n)}
-              onCancel={() => (adding = null)}
-            />
-          {/if}
         </li>
       {/each}
     </ul>

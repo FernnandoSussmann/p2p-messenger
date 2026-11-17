@@ -107,6 +107,15 @@ describe("ContactRow", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Connect" })).toBeNull());
   });
 
+  it("shows the connection line from the store, or Not connected", async () => {
+    show();
+    expect(screen.getByTestId("contact-connection")).toHaveTextContent("Not connected");
+    connections.set({ [ID]: { node_id: ID, state: "connected", direction: "outbound", reason: null } as never });
+    await waitFor(() => expect(screen.getByTestId("contact-connection")).toHaveTextContent(/^outbound \| connected$/));
+    connections.set({ [ID]: { node_id: ID, state: "failed", direction: "inbound", reason: "timeout" } as never });
+    await waitFor(() => expect(screen.getByTestId("contact-connection")).toHaveTextContent(/^inbound \| failed \| timeout$/));
+  });
+
   it("rename sends the new nickname", async () => {
     vi.mocked(contactsRename).mockResolvedValue(mk({ nickname: "Robert" }));
     show({ self_name: "Mallory" });
