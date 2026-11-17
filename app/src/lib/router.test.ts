@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { get } from "svelte/store";
-import { back, resetScreen, screen, showChat, showTab } from "./router";
+import { back, resetScreen, screen, showChat, showContactInfo, showTab } from "./router";
 
 beforeEach(resetScreen);
 
@@ -25,6 +25,16 @@ describe("router", () => {
   it("resetScreen returns home", () => {
     showTab("my-info");
     resetScreen();
+    expect(get(screen)).toEqual({ kind: "tab", tab: "contacts" });
+  });
+});
+
+describe("contact-info", () => {
+  it("back returns to the same chat, then to Contacts", () => {
+    showContactInfo("abc");
+    back();
+    expect(get(screen)).toEqual({ kind: "chat", nodeId: "abc" });
+    back();
     expect(get(screen)).toEqual({ kind: "tab", tab: "contacts" });
   });
 });
