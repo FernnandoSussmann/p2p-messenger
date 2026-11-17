@@ -126,4 +126,49 @@ describe("MessageBubble", () => {
       unmount();
     }
   });
+
+  it("outgoing_delivered_shows_sent_and_delivered_times", () => {
+    const { container } = show({ direction: "out", status: "delivered", delivered_at_ms: 1_700_000_060_000 });
+    const t = container.querySelectorAll("time");
+    expect(t).toHaveLength(2);
+    expect(t[0].getAttribute("title")).toBe("Sent (this device)");
+    expect(t[1].getAttribute("title")).toBe("Delivered (this device)");
+    expect(t[1].textContent).toBe(formatLocalTime(1_700_000_060_000));
+    expect(t[1].getAttribute("datetime")).toBe("2023-11-14T22:14:20.000Z");
+    expect(container.querySelector(".stamp")?.textContent).toContain(" | ");
+    expect(container.querySelector(".status")?.textContent).toBe("Delivered");
+  });
+
+  it("outgoing_delivered_without_time_shows_only_sent", () => {
+    const { container } = show({ direction: "out", status: "delivered", delivered_at_ms: null });
+    const t = container.querySelectorAll("time");
+    expect(t).toHaveLength(1);
+    expect(t[0].getAttribute("title")).toBe("Sent (this device)");
+    expect(container.querySelector(".status")?.textContent).toBe("Delivered");
+  });
+
+  it("pending_and_failed_show_no_delivered_time", () => {
+    for (const status of ["pending", "failed"] as const) {
+      const { container, unmount } = show({ direction: "out", status, delivered_at_ms: 1_700_000_060_000 });
+      expect(container.querySelectorAll("time")).toHaveLength(1);
+      unmount();
+    }
+  });
+
+  it("invalid_delivered_time_is_hidden", () => {
+    for (const delivered_at_ms of [1e20, NaN, Infinity]) {
+      const { container, unmount } = show({ direction: "out", status: "delivered", delivered_at_ms });
+      expect(container.querySelectorAll("time")).toHaveLength(1);
+      expect(container.querySelector(".stamp")?.textContent).not.toContain("unknown time");
+      unmount();
+    }
+  });
+
+  it("delivered_before_sent_is_shown_as_recorded", () => {
+    const { container } = show({ direction: "out", status: "delivered", delivered_at_ms: 1_699_999_000_000 });
+    const t = container.querySelectorAll("time");
+    expect(t).toHaveLength(2);
+    expect(t[0].textContent).toBe(formatLocalTime(1_700_000_000_000));
+    expect(t[1].textContent).toBe(formatLocalTime(1_699_999_000_000));
+  });
 });
