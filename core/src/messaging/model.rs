@@ -218,6 +218,7 @@ mod tests {
         let shown = format!("{row:?}");
         assert!(!shown.contains(&row.body));
         assert!(shown.contains(&format!("<redacted, {} bytes>", row.body.len())));
+        assert!(shown.contains("delivered_at_ms"));
     }
 
     #[test]

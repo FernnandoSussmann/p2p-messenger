@@ -177,7 +177,12 @@ mod tests {
         let v = serde_json::to_value(MessageDto::from(&out)).unwrap();
         assert_eq!(v["direction"], "out");
         assert_eq!(v["received_at_ms"], Value::Null);
+        assert_eq!(v["delivered_at_ms"], Value::Null);
         assert_eq!(v["status"], "pending");
+        out.status = MessageStatus::Delivered;
+        out.delivered_at_ms = Some(3_000);
+        let v = serde_json::to_value(MessageDto::from(&out)).unwrap();
+        assert_eq!(v["delivered_at_ms"], 3000);
     }
 
     #[test]
@@ -201,6 +206,11 @@ mod tests {
     fn message_status_dto_json_shape() {
         let r = row("a");
         let dto = MessageStatusDto::new(&r.peer, &r.id, MessageStatus::Delivered, Some(5));
+        let none = MessageStatusDto::new(&r.peer, &r.id, MessageStatus::Sending, None);
+        assert_eq!(
+            serde_json::to_value(&none).unwrap()["delivered_at_ms"],
+            Value::Null
+        );
         assert_eq!(
             serde_json::to_value(&dto).unwrap(),
             json!({"node_id": r.peer.to_string(), "id": r.id.to_string(), "status": "delivered", "delivered_at_ms": 5})
@@ -221,6 +231,14 @@ mod tests {
         });
         assert_eq!(name, "message_status");
         assert_eq!(v["status"], "failed");
+        assert_eq!(v["delivered_at_ms"], Value::Null);
+        let (_, v) = chat_event_json(&ChatEvent::Status {
+            peer: r.peer,
+            id: r.id,
+            status: MessageStatus::Delivered,
+            delivered_at_ms: Some(9),
+        });
+        assert_eq!(v["delivered_at_ms"], 9);
         assert_eq!(CHAT_RESYNC, "chat_resync");
     }
 
@@ -240,5 +258,6 @@ mod tests {
         let shown = format!("{:?} {:?}", dto, dto.messages[0]);
         assert!(!shown.contains("top secret"));
         assert!(shown.contains("redacted"));
+        assert!(shown.contains("delivered_at_ms"));
     }
 }

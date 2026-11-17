@@ -47,6 +47,7 @@ pub(crate) fn contract_suite(store: &dyn MessageStore) {
     insert_round_trips_every_field(store);
     duplicates_are_detected(store);
     status_lifecycle(store);
+    mark_delivered_is_write_once(store);
     page_orders_by_sent_at_then_seq(store);
     keyset_paging_has_no_gaps_or_duplicates(store);
     undelivered_is_bounded_and_ordered(store);
@@ -200,6 +201,72 @@ fn keyset_paging_has_no_gaps_or_duplicates(store: &dyn MessageStore) {
     let full = history_page(store, &a, &p, None, Some(5)).unwrap();
     assert_eq!(full.messages.len(), 5);
     assert!(full.next_before.is_some());
+}
+
+fn mark_delivered_is_write_once(store: &dyn MessageStore) {
+    let (a, b, p) = (AccountId::new(), AccountId::new(), node());
+    let sending = out(store, &a, &p, 1, "sending marker");
+    let pending = store
+        .insert_outgoing(&a, &p, &chat(2, "pending marker"), MessageStatus::Pending)
+        .unwrap();
+    let failed = out(store, &a, &p, 3, "failed marker");
+    store
+        .set_status(&a, &p, &failed.id, MessageStatus::Failed)
+        .unwrap();
+    for (row, t) in [(&sending, 100), (&pending, i64::MAX), (&failed, -4)] {
+        assert!(store.mark_delivered(&a, &p, &row.id, t).unwrap());
+        let got = store.get(&a, &p, &row.id).unwrap().unwrap();
+        assert_eq!(got.status, MessageStatus::Delivered);
+        assert_eq!(got.delivered_at_ms, Some(t));
+    }
+
+    assert!(!store.mark_delivered(&a, &p, &sending.id, 200).unwrap());
+    assert!(!store
+        .set_status(&a, &p, &sending.id, MessageStatus::Failed)
+        .unwrap());
+    let kept = store.get(&a, &p, &sending.id).unwrap().unwrap();
+    assert_eq!(
+        (kept.status, kept.delivered_at_ms),
+        (MessageStatus::Delivered, Some(100))
+    );
+
+    let inc = incoming(store, &a, &p, 4, "incoming marker");
+    assert!(!store.mark_delivered(&a, &p, &inc.id, 5).unwrap());
+    assert!(!store.mark_delivered(&a, &p, &new_message_id(), 5).unwrap());
+    assert_eq!(store.get(&a, &p, &inc.id).unwrap(), Some(inc));
+
+    let fresh = out(store, &a, &p, 5, "fresh marker");
+    assert_eq!(
+        store.set_status(&a, &p, &fresh.id, MessageStatus::Delivered),
+        Err(MessageStoreError::InvalidQuery)
+    );
+    assert_eq!(store.get(&a, &p, &fresh.id).unwrap(), Some(fresh));
+
+    let page = store.page(&a, &p, None, 10).unwrap();
+    let time_of = |id| page.iter().find(|r| r.id == id).unwrap().delivered_at_ms;
+    assert_eq!(time_of(pending.id), Some(i64::MAX));
+    let hits = store.search(&a, None, "marker", 10).unwrap();
+    let hit = hits.iter().find(|r| r.id == failed.id).unwrap();
+    assert_eq!(hit.delivered_at_ms, Some(-4));
+    let open_rows = store.undelivered(&a, 10).unwrap();
+    assert_eq!(ids(&open_rows).len(), 1);
+    assert!(open_rows.iter().all(|r| r.delivered_at_ms.is_none()));
+
+    let shared = chat(9, "shared marker");
+    store
+        .insert_outgoing(&a, &p, &shared, MessageStatus::Sending)
+        .unwrap();
+    store
+        .insert_outgoing(&b, &p, &shared, MessageStatus::Sending)
+        .unwrap();
+    let only_b = out(store, &b, &p, 10, "only b marker");
+    assert!(store.mark_delivered(&a, &p, &shared.id, 7).unwrap());
+    let theirs = store.get(&b, &p, &shared.id).unwrap().unwrap();
+    assert_eq!(
+        (theirs.status, theirs.delivered_at_ms),
+        (MessageStatus::Sending, None)
+    );
+    assert!(!store.mark_delivered(&a, &p, &only_b.id, 7).unwrap());
 }
 
 fn undelivered_is_bounded_and_ordered(store: &dyn MessageStore) {

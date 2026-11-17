@@ -61,6 +61,13 @@ async fn until(what: &str, mut probe: impl FnMut() -> bool) {
     }
 }
 
+fn wall_ms() -> i64 {
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    i64::try_from(d.as_millis()).unwrap()
+}
+
 fn row(p: &ChatPeer, peer: &NodeId, id: &MessageId) -> Option<StoredMessage> {
     p.store.get(&p.node.node.account(), peer, id).unwrap()
 }
@@ -163,16 +170,22 @@ fn happy_path_sending_then_delivered() {
         assert_eq!(count_received(&mut eb, Duration::from_millis(200)).await, 0);
         assert_eq!(history(&b, &a.node.id()).len(), 1);
 
-        loop {
+        let at = loop {
             let ev = next_chat(&mut ea, WAIT).await.expect("no Delivered event");
             if is_status(&ev, MessageStatus::Delivered, &sent.id) {
-                break;
+                let ChatEvent::Status {
+                    delivered_at_ms, ..
+                } = ev
+                else {
+                    unreachable!()
+                };
+                break delivered_at_ms.expect("Delivered carries a time");
             }
-        }
-        assert_eq!(
-            row(&a, &b.node.id(), &sent.id).unwrap().status,
-            MessageStatus::Delivered
-        );
+        };
+        assert!(sent.sent_at_ms <= at && at <= wall_ms());
+        let stored = row(&a, &b.node.id(), &sent.id).unwrap();
+        assert_eq!(stored.status, MessageStatus::Delivered);
+        assert_eq!(stored.delivered_at_ms, Some(at));
     });
 }
 
@@ -209,6 +222,46 @@ fn lost_ack_is_retried_with_same_id_and_ends_delivered() {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, sent.id);
         assert_eq!(count_received(&mut eb, Duration::from_millis(300)).await, 1);
+    });
+}
+
+#[test]
+fn lost_ack_records_one_delivered_time() {
+    run(async {
+        let (a, b) = pair(Memory, Memory).await;
+        let (a_acc, b_id) = (a.node.node.account(), b.node.id());
+        let mut ea = a.messaging.subscribe();
+        b.config.faults.drop_acks.store(1, Ordering::SeqCst);
+        let sent = a
+            .messaging
+            .send(b_id, "retry me once".into())
+            .await
+            .unwrap();
+        wait_status(&a, &b_id, &sent.id, MessageStatus::Delivered).await;
+        let mut times = Vec::new();
+        while let Some(ev) = next_chat(&mut ea, Duration::from_millis(300)).await {
+            if let ChatEvent::Status {
+                id,
+                status: MessageStatus::Delivered,
+                delivered_at_ms,
+                ..
+            } = ev
+            {
+                if id == sent.id {
+                    times.push(delivered_at_ms);
+                }
+            }
+        }
+        assert_eq!(times.len(), 1);
+        let stored = row(&a, &b_id, &sent.id).unwrap();
+        assert!(stored.delivered_at_ms.is_some());
+        assert_eq!(times[0], stored.delivered_at_ms);
+        let other = stored.delivered_at_ms.unwrap() + 1_000;
+        assert!(!a
+            .store
+            .mark_delivered(&a_acc, &b_id, &sent.id, other)
+            .unwrap());
+        assert_eq!(row(&a, &b_id, &sent.id).unwrap(), stored);
     });
 }
 
@@ -285,11 +338,19 @@ fn retries_exhaust_to_failed_then_manual_resend_reuses_id() {
             let ev = next_chat(&mut ea, WAIT).await.expect("no Failed event");
             saw_pending |= is_status(&ev, MessageStatus::Pending, &sent.id);
             if is_status(&ev, MessageStatus::Failed, &sent.id) {
+                assert!(matches!(
+                    ev,
+                    ChatEvent::Status {
+                        delivered_at_ms: None,
+                        ..
+                    }
+                ));
                 break;
             }
         }
         assert!(saw_pending);
         wait_status(&a, &b_id, &sent.id, MessageStatus::Failed).await;
+        assert_eq!(row(&a, &b_id, &sent.id).unwrap().delivered_at_ms, None);
 
         b.config.faults.drop_acks.store(0, Ordering::SeqCst);
         let status = a.messaging.resend(b_id, sent.id).await.unwrap();
@@ -299,6 +360,9 @@ fn retries_exhaust_to_failed_then_manual_resend_reuses_id() {
         assert_eq!(rows.iter().filter(|r| r.id == sent.id).count(), 1);
         let original = row(&a, &b_id, &sent.id).unwrap();
         assert_eq!(original.sent_at_ms, sent.sent_at_ms);
+        assert!(original
+            .delivered_at_ms
+            .is_some_and(|t| t >= sent.sent_at_ms));
 
         assert_eq!(
             a.messaging.resend(b_id, sent.id).await,
@@ -639,6 +703,7 @@ fn persistence_round_trip_with_sqlcipher() {
             assert_eq!(r.status == MessageStatus::Delivered, outgoing);
             assert_eq!(r.status == MessageStatus::Received, !outgoing);
             assert_eq!(r.received_at_ms.is_some(), !outgoing);
+            assert_eq!(r.delivered_at_ms.is_some(), outgoing);
         }
         assert!(after_a.iter().any(|r| r.body == "one 👋\nline"));
     });
