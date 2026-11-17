@@ -1,0 +1,1230 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>p2p-messenger · Visual identity</title>
+<script>
+  /* Resolve the theme before first paint so there is no flash or colour transition on load. */
+  (() => {
+    let t;
+    try { t = localStorage.getItem("p2pm-theme"); } catch (_) {}
+    if (!["dark", "light", "midnight"].includes(t)) {
+      t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    }
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+<style>
+/* =====================================================================
+   Design tokens
+   Three themes share one token set. Base pair per theme (given):
+     dark      text #B988EE  on #000000
+     light     text #5A00BD  on #FFFFFF
+     midnight  text #888888  on #101525
+   Everything else is derived to stay inside each palette.
+   ===================================================================== */
+:root,
+[data-theme="dark"] {
+  --bg: #000000;
+  --surface: #0D0913;
+  --surface-2: #160F20;
+  --border: #2A1D3A;
+  --border-strong: #46305F;
+  --text: #B988EE;
+  --text-strong: #E2CFFA;
+  --text-muted: #8E6BB8;
+  --accent: #B988EE;
+  --accent-hover: #CBA5F3;
+  --accent-contrast: #000000;
+  --success: #8FD9B0;
+  --warning: #E8C27A;
+  --danger: #F08A9B;
+  --bubble-in: #160F20;
+  --bubble-in-text: #D2B6F5;
+  --bubble-out: #2B1C40;
+  --bubble-out-text: #EBDDFC;
+  --shadow: 0 12px 40px rgba(0, 0, 0, .6), 0 0 0 1px var(--border);
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg: #FFFFFF;
+  --surface: #FAF7FE;
+  --surface-2: #F3ECFC;
+  --border: #E6DAF7;
+  --border-strong: #C9B2EC;
+  --text: #5A00BD;
+  --text-strong: #3D0082;
+  --text-muted: #8559C9;
+  --accent: #5A00BD;
+  --accent-hover: #4A009C;
+  --accent-contrast: #FFFFFF;
+  --success: #1F7A4D;
+  --warning: #8A5A00;
+  --danger: #B3261E;
+  --bubble-in: #F3ECFC;
+  --bubble-in-text: #3D0082;
+  --bubble-out: #5A00BD;
+  --bubble-out-text: #FFFFFF;
+  --shadow: 0 12px 40px rgba(90, 0, 189, .12), 0 0 0 1px var(--border);
+  color-scheme: light;
+}
+
+[data-theme="midnight"] {
+  --bg: #101525;
+  --surface: #151B2E;
+  --surface-2: #1B2238;
+  --border: #262E48;
+  --border-strong: #3A4566;
+  --text: #888888;
+  --text-strong: #C9CEDB;
+  --text-muted: #80869A;
+  --accent: #8A9BD6;
+  --accent-hover: #A3B1E2;
+  --accent-contrast: #101525;
+  --success: #7FB89A;
+  --warning: #D1B06E;
+  --danger: #D98A8A;
+  --bubble-in: #1B2238;
+  --bubble-in-text: #B4B9C6;
+  --bubble-out: #2A3558;
+  --bubble-out-text: #DCE1EE;
+  --shadow: 0 12px 40px rgba(0, 0, 0, .45), 0 0 0 1px var(--border);
+  color-scheme: dark;
+}
+
+/* Derived tokens: same formula in every theme. */
+:root,
+[data-theme] {
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --success-soft: color-mix(in srgb, var(--success) 14%, transparent);
+  --warning-soft: color-mix(in srgb, var(--warning) 14%, transparent);
+  --danger-soft: color-mix(in srgb, var(--danger) 14%, transparent);
+  --focus: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+}
+
+/* =====================================================================
+   Base
+   ===================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { background: var(--bg); }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 var(--font);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color .25s var(--ease), color .25s var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+
+::selection { background: var(--accent); color: var(--accent-contrast); }
+
+h1, h2, h3, h4 { color: var(--text-strong); margin: 0; font-weight: 600; letter-spacing: -.01em; }
+
+a { color: var(--accent); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+a:hover { color: var(--accent-hover); text-decoration-thickness: 2px; }
+
+:focus-visible { outline: none; box-shadow: var(--focus); }
+
+code, kbd, .mono { font-family: var(--mono); font-size: .9em; }
+
+hr, .divider { border: 0; border-top: 1px solid var(--border); margin: 24px 0; }
+
+/* =====================================================================
+   Page layout
+   ===================================================================== */
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px 32px;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; color: var(--text-strong); font-weight: 600; }
+.brand svg { color: var(--accent); }
+
+main { max-width: 1080px; margin: 0 auto; padding: 48px 32px 96px; }
+
+.intro { margin-bottom: 56px; }
+.intro h1 { font-size: 34px; margin-bottom: 8px; }
+.intro p { max-width: 60ch; margin: 0; }
+
+section { margin-bottom: 64px; }
+.section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.section-head h2 { font-size: 20px; }
+.section-head p { margin: 0; color: var(--text-muted); font-size: 13px; }
+
+.grid { display: grid; gap: 20px; }
+.grid-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.grid-3 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+}
+.panel h3 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin-bottom: 16px; }
+
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.stack { display: flex; flex-direction: column; gap: 14px; }
+
+/* =====================================================================
+   Typography
+   ===================================================================== */
+.type-scale > * { margin: 0 0 12px; }
+.t-display { font-size: 40px; line-height: 1.1; font-weight: 650; color: var(--text-strong); letter-spacing: -.02em; }
+.t-h1 { font-size: 28px; line-height: 1.2; }
+.t-h2 { font-size: 20px; line-height: 1.3; }
+.t-body { font-size: 15px; }
+.t-small { font-size: 13px; color: var(--text-muted); }
+.t-caption { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--text-muted); font-weight: 600; }
+.type-meta { font-family: var(--mono); font-size: 11px; color: var(--text-muted); margin-left: 8px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+/* =====================================================================
+   Color swatches
+   ===================================================================== */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.swatch { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.swatch-chip { height: 64px; border-bottom: 1px solid var(--border); }
+.swatch-info { padding: 10px 12px; font-size: 12px; line-height: 1.4; }
+.swatch-info strong { display: block; color: var(--text-strong); font-weight: 600; }
+.swatch-info .mono { color: var(--text-muted); }
+.ratio { float: right; font-family: var(--mono); font-size: 11px; }
+.ratio.pass { color: var(--success); }
+.ratio.large { color: var(--warning); }
+.ratio.na { color: var(--text-muted); }
+
+/* Theme previews */
+.previews { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.preview {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 20px; display: flex; flex-direction: column; gap: 14px;
+  cursor: pointer; text-align: left; font: inherit;
+  transition: transform .2s var(--ease), border-color .2s var(--ease);
+}
+.preview:hover { transform: translateY(-2px); border-color: var(--border-strong); }
+.preview[aria-pressed="true"] { border-color: var(--accent); }
+.preview-head { display: flex; justify-content: space-between; align-items: center; }
+.preview-head strong { color: var(--text-strong); }
+.preview-pair { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+
+/* =====================================================================
+   Buttons
+   ===================================================================== */
+.btn {
+  --h: 38px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: var(--h); padding: 0 16px;
+  font: 500 14px/1 var(--font);
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease), transform .1s var(--ease);
+  white-space: nowrap;
+  text-decoration: none;
+}
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+.btn svg { width: 16px; height: 16px; flex: none; }
+
+.btn-primary { background: var(--accent); color: var(--accent-contrast); }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); color: var(--accent-contrast); }
+
+.btn-secondary { background: transparent; color: var(--accent); border-color: var(--border-strong); }
+.btn-secondary:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
+
+.btn-ghost { background: transparent; color: var(--text); }
+.btn-ghost:hover:not(:disabled) { background: var(--accent-soft); color: var(--text-strong); }
+
+.btn-danger { background: transparent; color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.btn-danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); }
+
+.btn-sm { --h: 30px; padding: 0 12px; font-size: 13px; border-radius: var(--radius-sm); }
+.btn-lg { --h: 46px; padding: 0 22px; font-size: 15px; }
+.btn-icon { width: var(--h); padding: 0; }
+.btn-block { width: 100%; }
+
+.spinner {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid currentColor; border-right-color: transparent;
+  animation: spin .7s linear infinite;
+}
+.spinner-lg { width: 28px; height: 28px; border-width: 3px; color: var(--accent); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* =====================================================================
+   Form fields
+   ===================================================================== */
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label, .label { font-size: 13px; font-weight: 500; color: var(--text-strong); }
+.hint { font-size: 12px; color: var(--text-muted); }
+.field.invalid .hint { color: var(--danger); }
+
+.input, .textarea, .select select {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  font: 14px/1.4 var(--font);
+  color: var(--text-strong);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+}
+.input::placeholder, .textarea::placeholder { color: var(--text-muted); opacity: 1; }
+.input:hover, .textarea:hover, .select select:hover { border-color: var(--accent); }
+.input:focus, .textarea:focus, .select select:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
+.input:disabled, .textarea:disabled, .select select:disabled { opacity: .5; cursor: not-allowed; border-color: var(--border); }
+.field.invalid .input { border-color: var(--danger); }
+.field.invalid .input:focus { box-shadow: 0 0 0 3px var(--danger-soft); }
+.input[readonly] { background: var(--surface-2); border-color: var(--border); font-family: var(--mono); font-size: 13px; }
+
+.textarea { height: auto; min-height: 96px; padding: 10px 12px; resize: vertical; }
+
+.select { position: relative; }
+.select select { appearance: none; padding-right: 36px; cursor: pointer; }
+.select::after {
+  content: ""; position: absolute; right: 14px; top: 50%;
+  width: 7px; height: 7px; margin-top: -6px;
+  border-right: 1.5px solid var(--text-muted); border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(45deg); pointer-events: none;
+}
+
+.input-wrap { position: relative; }
+.input-wrap > svg { position: absolute; left: 12px; top: 50%; width: 16px; height: 16px; margin-top: -8px; color: var(--text-muted); pointer-events: none; }
+.input-wrap > .input { padding-left: 36px; }
+.input-wrap > .input-action { position: absolute; right: 4px; top: 4px; --h: 32px; }
+.input-wrap.has-action > .input { padding-right: 44px; }
+
+.input-group { display: flex; }
+.input-group .input { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.input-group .btn { border-top-left-radius: 0; border-bottom-left-radius: 0; height: 40px; }
+
+/* =====================================================================
+   Checkbox, radio, switch
+   ===================================================================== */
+.check, .radio, .switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; user-select: none; }
+.check input, .radio input, .switch input {
+  appearance: none; margin: 0; flex: none; cursor: pointer;
+  border: 1.5px solid var(--border-strong); background: var(--bg);
+  transition: background-color .15s var(--ease), border-color .15s var(--ease);
+  display: grid; place-content: center;
+}
+.check input:hover, .radio input:hover { border-color: var(--accent); }
+.check input:disabled, .radio input:disabled, .switch input:disabled { opacity: .45; cursor: not-allowed; }
+.check:has(input:disabled), .radio:has(input:disabled), .switch:has(input:disabled) { cursor: not-allowed; opacity: .7; }
+
+.check input { width: 18px; height: 18px; border-radius: 5px; }
+.check input::before {
+  content: ""; width: 10px; height: 10px;
+  clip-path: polygon(14% 44%, 0 59%, 40% 100%, 100% 22%, 86% 8%, 39% 71%);
+  background: var(--accent-contrast); transform: scale(0); transition: transform .12s var(--ease);
+}
+.check input:checked, .check input:indeterminate { background: var(--accent); border-color: var(--accent); }
+.check input:checked::before { transform: scale(1); }
+.check input:indeterminate::before { clip-path: inset(40% 10%); transform: scale(1); }
+
+.radio input { width: 18px; height: 18px; border-radius: 50%; }
+.radio input::before {
+  content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); transform: scale(0); transition: transform .12s var(--ease);
+}
+.radio input:checked { border-color: var(--accent); }
+.radio input:checked::before { transform: scale(1); }
+
+.switch input { width: 36px; height: 20px; border-radius: 999px; place-content: center start; padding: 0 2px; }
+.switch input::before {
+  content: ""; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--text-muted); transition: transform .18s var(--ease), background-color .18s var(--ease);
+}
+.switch input:checked { background: var(--accent); border-color: var(--accent); }
+.switch input:checked::before { transform: translateX(16px); background: var(--accent-contrast); }
+
+.check input:focus-visible, .radio input:focus-visible, .switch input:focus-visible { box-shadow: var(--focus); }
+
+.option-desc { display: block; font-size: 12px; color: var(--text-muted); }
+.option-card {
+  display: flex; align-items: flex-start; gap: 12px; padding: 14px;
+  border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+  transition: border-color .15s var(--ease), background-color .15s var(--ease);
+}
+.option-card input { margin-top: 2px; }
+.option-card:hover { border-color: var(--border-strong); }
+.option-card:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+
+/* Segmented control */
+.segmented {
+  display: inline-flex; padding: 3px; gap: 2px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.segmented label { position: relative; }
+.segmented input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.segmented span {
+  display: block; padding: 6px 14px; font-size: 13px; font-weight: 500;
+  border-radius: 7px; color: var(--text-muted); transition: background-color .15s var(--ease), color .15s var(--ease);
+}
+.segmented input:hover + span { color: var(--text-strong); }
+.segmented input:checked + span { background: var(--bg); color: var(--text-strong); box-shadow: 0 0 0 1px var(--border-strong); }
+.segmented input:focus-visible + span { box-shadow: var(--focus); }
+
+/* Range */
+.range { width: 100%; appearance: none; background: transparent; height: 20px; cursor: pointer; }
+.range::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: linear-gradient(to right, var(--accent) var(--pct, 50%), var(--border-strong) var(--pct, 50%)); }
+.range::-moz-range-track { height: 4px; border-radius: 4px; background: var(--border-strong); }
+.range::-moz-range-progress { height: 4px; border-radius: 4px; background: var(--accent); }
+.range::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%; background: var(--bg); border: 2px solid var(--accent); }
+.range::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--bg); border: 2px solid var(--accent); }
+.range:focus-visible { box-shadow: none; }
+.range:focus-visible::-webkit-slider-thumb { box-shadow: var(--focus); }
+.range:focus-visible::-moz-range-thumb { box-shadow: var(--focus); }
+
+/* =====================================================================
+   Feedback
+   ===================================================================== */
+.alert {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 12px 14px; border-radius: var(--radius);
+  border: 1px solid; font-size: 14px;
+}
+.alert svg { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+.alert strong { color: inherit; display: block; font-weight: 600; }
+.alert p { margin: 2px 0 0; color: var(--text); }
+.alert-info    { color: var(--accent);  background: var(--accent-soft);  border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.alert-success { color: var(--success); background: var(--success-soft); border-color: color-mix(in srgb, var(--success) 35%, transparent); }
+.alert-warning { color: var(--warning); background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 35%, transparent); }
+.alert-danger  { color: var(--danger);  background: var(--danger-soft);  border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 22px; padding: 0 8px; border-radius: 999px;
+  font-size: 12px; font-weight: 500; line-height: 1;
+  background: var(--accent-soft); color: var(--accent);
+}
+.badge-solid { background: var(--accent); color: var(--accent-contrast); }
+.badge-outline { background: transparent; border: 1px solid var(--border-strong); color: var(--text); }
+.badge-success { background: var(--success-soft); color: var(--success); }
+.badge-warning { background: var(--warning-soft); color: var(--warning); }
+.badge-danger  { background: var(--danger-soft);  color: var(--danger); }
+.badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; display: inline-grid; place-items: center; font-size: 11px; font-weight: 600; background: var(--accent); color: var(--accent-contrast); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 6px 0 12px; border-radius: 999px;
+  border: 1px solid var(--border-strong); font-size: 13px; color: var(--text-strong);
+}
+.chip button { width: 20px; height: 20px; border-radius: 50%; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; display: grid; place-items: center; }
+.chip button:hover { background: var(--accent-soft); color: var(--text-strong); }
+
+.progress { height: 6px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+.progress > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+.progress.indeterminate > span { width: 35%; animation: indet 1.4s var(--ease) infinite; }
+@keyframes indet { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+
+.tooltip-host { position: relative; display: inline-flex; }
+.tooltip {
+  position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translate(-50%, 4px);
+  padding: 6px 10px; border-radius: var(--radius-sm);
+  background: var(--text-strong); color: var(--bg);
+  font-size: 12px; white-space: nowrap; pointer-events: none;
+  opacity: 0; transition: opacity .15s var(--ease), transform .15s var(--ease);
+}
+.tooltip-host:hover .tooltip, .tooltip-host:focus-within .tooltip { opacity: 1; transform: translate(-50%, 0); }
+
+.toast-region { position: fixed; right: 24px; bottom: 24px; display: flex; flex-direction: column; gap: 10px; z-index: 50; }
+.toast {
+  display: flex; align-items: center; gap: 12px; min-width: 280px;
+  padding: 12px 14px; border-radius: var(--radius);
+  background: var(--surface); color: var(--text-strong); box-shadow: var(--shadow);
+  font-size: 14px; animation: toast-in .25s var(--ease);
+}
+.toast svg { width: 18px; height: 18px; color: var(--success); flex: none; }
+.toast .btn { margin-left: auto; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+
+/* =====================================================================
+   Navigation
+   ===================================================================== */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.tab {
+  position: relative; padding: 10px 14px; border: 0; background: none; cursor: pointer;
+  font: 500 14px var(--font); color: var(--text-muted); border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+.tab:hover { color: var(--text-strong); }
+.tab[aria-selected="true"] { color: var(--text-strong); }
+.tab[aria-selected="true"]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); }
+.tab-panel { padding: 16px 2px 0; font-size: 14px; }
+.tab-panel[hidden] { display: none; }
+
+.nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.nav-list a {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm);
+  color: var(--text); text-decoration: none; font-size: 14px;
+}
+.nav-list a svg { width: 16px; height: 16px; }
+.nav-list a:hover { background: var(--accent-soft); color: var(--text-strong); }
+.nav-list a[aria-current="page"] { background: var(--surface-2); color: var(--text-strong); font-weight: 500; }
+.nav-list .count { margin-left: auto; }
+
+kbd {
+  display: inline-block; padding: 1px 6px; border-radius: 5px; font-size: 12px;
+  border: 1px solid var(--border-strong); border-bottom-width: 2px; color: var(--text-strong); background: var(--surface-2);
+}
+
+/* =====================================================================
+   Data display
+   ===================================================================== */
+.avatar {
+  --size: 40px;
+  position: relative; flex: none;
+  width: var(--size); height: var(--size); border-radius: 50%;
+  display: grid; place-items: center;
+  font-weight: 600; font-size: calc(var(--size) * .38);
+  background: var(--accent-soft); color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.avatar-sm { --size: 28px; }
+.avatar-lg { --size: 56px; }
+.avatar .presence {
+  position: absolute; right: -1px; bottom: -1px;
+  width: calc(var(--size) * .3); height: calc(var(--size) * .3); min-width: 9px; min-height: 9px;
+  border-radius: 50%; border: 2px solid var(--surface); background: var(--text-muted);
+}
+.presence.online { background: var(--success); }
+.presence.away { background: var(--warning); }
+
+.list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.list li { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--surface); cursor: pointer; transition: background-color .12s var(--ease); }
+.list li + li { border-top: 1px solid var(--border); }
+.list li:hover { background: var(--surface-2); }
+.list li[aria-selected="true"] { background: var(--accent-soft); }
+.list .meta { flex: 1; min-width: 0; }
+.list .name { color: var(--text-strong); font-weight: 500; font-size: 14px; }
+.list .sub { font-size: 13px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list .time { font-size: 12px; color: var(--text-muted); align-self: flex-start; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.card-body { padding: 20px; }
+.card-body h4 { font-size: 16px; margin-bottom: 6px; }
+.card-body p { margin: 0; font-size: 14px; }
+.card-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--bg); }
+
+.node-id {
+  font-family: var(--mono); font-size: 13px; letter-spacing: .02em; color: var(--text-strong);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 8px 10px; word-break: break-all;
+}
+.node-id .grp:nth-child(even) { color: var(--text-muted); }
+
+.empty { text-align: center; padding: 32px 16px; border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); }
+.empty > svg { width: 32px; height: 32px; color: var(--text-muted); margin-bottom: 8px; }
+.empty h4 { font-size: 15px; margin-bottom: 4px; }
+.empty p { margin: 0 0 16px; font-size: 13px; color: var(--text-muted); }
+
+.skeleton { background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 50%, var(--surface-2) 75%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; border-radius: var(--radius-sm); }
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* =====================================================================
+   Messenger patterns
+   ===================================================================== */
+.chat { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg); }
+.chat-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.chat-head .meta { flex: 1; }
+.chat-head .name { color: var(--text-strong); font-weight: 600; font-size: 14px; }
+.chat-head .sub { font-size: 12px; color: var(--text-muted); }
+.chat-body { display: flex; flex-direction: column; gap: 6px; padding: 20px 16px; min-height: 260px; }
+.day { align-self: center; font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--text-muted); margin: 4px 0 10px; }
+.e2e-note { align-self: center; display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--text-muted); padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; margin-bottom: 12px; }
+.e2e-note svg { width: 13px; height: 13px; }
+
+.bubble { max-width: 72%; padding: 8px 12px; border-radius: 16px; font-size: 14px; line-height: 1.45; }
+.bubble .stamp { display: flex; justify-content: flex-end; align-items: center; gap: 4px; font-size: 11px; margin-top: 2px; opacity: .7; }
+.bubble .stamp svg { width: 14px; height: 14px; }
+.bubble.in { align-self: flex-start; background: var(--bubble-in); color: var(--bubble-in-text); border-bottom-left-radius: 4px; border: 1px solid var(--border); }
+.bubble.out { align-self: flex-end; background: var(--bubble-out); color: var(--bubble-out-text); border-bottom-right-radius: 4px; }
+.bubble.failed { border: 1px solid var(--danger); }
+.bubble-error { align-self: flex-end; font-size: 12px; color: var(--danger); display: flex; gap: 8px; align-items: center; }
+.bubble-error button { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+
+.typing { align-self: flex-start; display: inline-flex; gap: 4px; padding: 12px 14px; background: var(--bubble-in); border: 1px solid var(--border); border-radius: 16px; border-bottom-left-radius: 4px; }
+.typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); animation: blink 1.2s infinite; }
+.typing i:nth-child(2) { animation-delay: .2s; }
+.typing i:nth-child(3) { animation-delay: .4s; }
+@keyframes blink { 0%, 80%, 100% { opacity: .3; } 40% { opacity: 1; } }
+
+.composer { display: flex; gap: 8px; align-items: flex-end; padding: 12px; border-top: 1px solid var(--border); background: var(--surface); }
+.composer .textarea { min-height: 40px; height: 40px; resize: none; padding-top: 9px; }
+
+.trust { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; }
+.trust svg { width: 14px; height: 14px; }
+.trust.verified { color: var(--success); }
+.trust.unverified { color: var(--warning); }
+
+/* =====================================================================
+   Dialog
+   ===================================================================== */
+.dialog {
+  width: min(440px, calc(100vw - 32px));
+  background: var(--surface); color: var(--text);
+  border: 0; border-radius: var(--radius-lg); padding: 0;
+  box-shadow: var(--shadow);
+}
+.dialog::backdrop { background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(3px); }
+.dialog[open] { animation: dialog-in .2s var(--ease); }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+.dialog-body { padding: 24px; }
+.dialog-body h3 { font-size: 17px; margin-bottom: 8px; }
+.dialog-body p { margin: 0; font-size: 14px; }
+.dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 24px; border-top: 1px solid var(--border); }
+.dialog-static { position: static; display: block; box-shadow: none; border: 1px solid var(--border); }
+
+footer { text-align: center; font-size: 12px; color: var(--text-muted); padding: 32px; border-top: 1px solid var(--border); }
+
+@media (max-width: 640px) {
+  .topbar { padding: 12px 16px; }
+  .brand span { display: none; }
+  main { padding: 32px 16px 64px; }
+  .bubble { max-width: 85%; }
+}
+</style>
+</head>
+<body>
+
+<!-- Icon sprite: 1.5px strokes, 24px grid, currentColor -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M8.7 10.6l6.6-3.2M8.7 13.4l6.6 3.2"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-8-6 16-2.5-6.5L4 12z"/><path d="M11.5 13.5L20 4"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l9 16H3l9-16z"/><path d="M12 10v4M12 17h.01"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-check2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12.5l4.5 4.5L16 7.5M11 16l1 1L21.5 7.5"/></symbol>
+    <symbol id="i-circle-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4V5z"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.4-5.5 6.5-5.5s5.7 2 6.5 5.5"/><path d="M16 4.8a3.5 3.5 0 010 6.4M18 14.8c1.8.7 3 2.5 3.5 5.2"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 9a14 14 0 0119 0M5.5 12.5a9.5 9.5 0 0113 0M8.5 16a5 5 0 017 0"/><path d="M12 19.5h.01"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
+  </defs>
+</svg>
+
+<header class="topbar">
+  <div class="brand">
+    <svg width="24" height="24"><use href="#i-logo"/></svg>
+    <span>p2p messenger</span>
+  </div>
+  <div class="segmented" role="radiogroup" aria-label="Theme">
+    <label><input type="radio" name="theme" value="dark" /><span>Dark</span></label>
+    <label><input type="radio" name="theme" value="light" /><span>Light</span></label>
+    <label><input type="radio" name="theme" value="midnight" /><span>Midnight</span></label>
+  </div>
+</header>
+
+<main>
+  <div class="intro">
+    <p class="t-caption">Visual identity · v0.1</p>
+    <h1>Quiet by design.</h1>
+    <p>A minimal component set for a private, server-less messenger. One token set, three themes. Thin borders, a single accent per theme, and colour only where it means something.</p>
+  </div>
+
+  <!-- ============================================================ THEMES -->
+  <section aria-labelledby="s-themes">
+    <div class="section-head">
+      <h2 id="s-themes">Themes</h2>
+      <p>Click a preview to apply it</p>
+    </div>
+    <div class="previews">
+      <button class="preview" data-theme="dark" data-pick="dark" aria-pressed="false">
+        <div class="preview-head"><strong>Dark</strong><span class="preview-pair">#B988EE / #000000</span></div>
+        <div class="bubble in">Is this line private?</div>
+        <div class="bubble out">End to end. No server.</div>
+        <span class="btn btn-primary btn-sm" style="align-self:flex-start">Send</span>
+      </button>
+      <button class="preview" data-theme="light" data-pick="light" aria-pressed="false">
+        <div class="preview-head"><strong>Light</strong><span class="preview-pair">#5A00BD / #FFFFFF</span></div>
+        <div class="bubble in">Is this line private?</div>
+        <div class="bubble out">End to end. No server.</div>
+        <span class="btn btn-primary btn-sm" style="align-self:flex-start">Send</span>
+      </button>
+      <button class="preview" data-theme="midnight" data-pick="midnight" aria-pressed="false">
+        <div class="preview-head"><strong>Midnight</strong><span class="preview-pair">#888888 / #101525</span></div>
+        <div class="bubble in">Is this line private?</div>
+        <div class="bubble out">End to end. No server.</div>
+        <span class="btn btn-primary btn-sm" style="align-self:flex-start">Send</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ============================================================ COLOR -->
+  <section aria-labelledby="s-color">
+    <div class="section-head">
+      <h2 id="s-color">Colour tokens</h2>
+      <p>WCAG contrast against <code>--bg</code> · <span style="color:var(--success)">AA ≥ 4.5</span> · <span style="color:var(--warning)">large text ≥ 3</span></p>
+    </div>
+    <div class="swatches" id="swatches"></div>
+  </section>
+
+  <!-- ============================================================ TYPE -->
+  <section aria-labelledby="s-type">
+    <div class="section-head">
+      <h2 id="s-type">Typography</h2>
+      <p>System UI stack · monospace for keys and IDs</p>
+    </div>
+    <div class="panel type-scale">
+      <p class="t-display">Your key is your name<span class="type-meta">40 / 650</span></p>
+      <p class="t-h1" style="color:var(--text-strong);font-weight:600">Contacts and trust<span class="type-meta">28 / 600</span></p>
+      <p class="t-h2" style="color:var(--text-strong);font-weight:600">Verify this device<span class="type-meta">20 / 600</span></p>
+      <p class="t-body">Messages travel directly between peers. When a direct path is not possible, an encrypted relay carries ciphertext it cannot read.<span class="type-meta">15 / 400</span></p>
+      <p class="t-small">Last seen 4 minutes ago over LAN<span class="type-meta">13 / muted</span></p>
+      <p class="t-caption">Section label<span class="type-meta">11 / caps</span></p>
+      <p class="mono" style="color:var(--text-strong)">k51q…7f3a · 2b9e · c04d<span class="type-meta">mono 13</span></p>
+    </div>
+  </section>
+
+  <!-- ============================================================ BUTTONS -->
+  <section aria-labelledby="s-buttons">
+    <div class="section-head">
+      <h2 id="s-buttons">Buttons</h2>
+      <p>One primary action per view</p>
+    </div>
+    <div class="grid grid-2">
+      <div class="panel">
+        <h3>Variants</h3>
+        <div class="row">
+          <button class="btn btn-primary">Primary</button>
+          <button class="btn btn-secondary">Secondary</button>
+          <button class="btn btn-ghost">Ghost</button>
+          <button class="btn btn-danger">Remove</button>
+        </div>
+        <hr />
+        <h3>States</h3>
+        <div class="row">
+          <button class="btn btn-primary" disabled>Disabled</button>
+          <button class="btn btn-secondary" disabled>Disabled</button>
+          <button class="btn btn-primary" aria-busy="true"><span class="spinner" aria-hidden="true"></span>Connecting</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Sizes</h3>
+        <div class="row">
+          <button class="btn btn-primary btn-sm">Small</button>
+          <button class="btn btn-primary">Medium</button>
+          <button class="btn btn-primary btn-lg">Large</button>
+        </div>
+        <hr />
+        <h3>With icons</h3>
+        <div class="row">
+          <button class="btn btn-primary"><svg><use href="#i-send"/></svg>Send</button>
+          <button class="btn btn-secondary"><svg><use href="#i-plus"/></svg>Add contact</button>
+          <span class="tooltip-host">
+            <button class="btn btn-ghost btn-icon" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+            <span class="tooltip" role="tooltip">Settings</span>
+          </span>
+          <span class="tooltip-host">
+            <button class="btn btn-secondary btn-icon" aria-label="More"><svg><use href="#i-dots"/></svg></button>
+            <span class="tooltip" role="tooltip">More actions</span>
+          </span>
+          <button class="btn btn-danger btn-icon" aria-label="Delete"><svg><use href="#i-trash"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ INPUTS -->
+  <section aria-labelledby="s-inputs">
+    <div class="section-head">
+      <h2 id="s-inputs">Text inputs</h2>
+      <p>Labels always visible · hints below</p>
+    </div>
+    <div class="grid grid-2">
+      <div class="panel stack">
+        <div class="field">
+          <label for="f-name">Display name</label>
+          <input id="f-name" class="input" type="text" placeholder="How peers will see you" />
+          <span class="hint">Shared only with contacts you accept.</span>
+        </div>
+        <div class="field invalid">
+          <label for="f-ticket">Connection ticket</label>
+          <input id="f-ticket" class="input" type="text" value="nodeabc123" aria-invalid="true" aria-describedby="f-ticket-hint" />
+          <span class="hint" id="f-ticket-hint">This ticket is malformed. Ask your contact to share it again.</span>
+        </div>
+        <div class="field">
+          <label for="f-pass">Passphrase</label>
+          <div class="input-wrap has-action">
+            <svg><use href="#i-lock"/></svg>
+            <input id="f-pass" class="input" type="password" value="correct horse battery" />
+            <button class="btn btn-ghost btn-icon input-action" type="button" aria-label="Show passphrase" data-reveal="f-pass"><svg><use href="#i-eye"/></svg></button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="f-dis">Relay URL</label>
+          <input id="f-dis" class="input" type="url" value="https://relay.example" disabled />
+          <span class="hint">Managed by your profile.</span>
+        </div>
+      </div>
+      <div class="panel stack">
+        <div class="field">
+          <label for="f-search">Search</label>
+          <div class="input-wrap">
+            <svg><use href="#i-search"/></svg>
+            <input id="f-search" class="input" type="search" placeholder="Search messages and contacts" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="f-select">Visibility on local network</label>
+          <div class="select">
+            <select id="f-select">
+              <option>Visible to contacts only</option>
+              <option>Visible to everyone on LAN</option>
+              <option>Hidden</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="f-id">Your node ID</label>
+          <div class="input-group">
+            <input id="f-id" class="input" type="text" value="k51qzi5uqu5dgutdk6i1ynyzgkqngpha" readonly />
+            <button class="btn btn-secondary" type="button"><svg><use href="#i-copy"/></svg>Copy</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="f-note">Note for this contact</label>
+          <textarea id="f-note" class="textarea" placeholder="Only stored on this device"></textarea>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ SELECTION -->
+  <section aria-labelledby="s-select">
+    <div class="section-head">
+      <h2 id="s-select">Selection controls</h2>
+      <p>Checkbox · radio · switch · segmented · range</p>
+    </div>
+    <div class="grid grid-3">
+      <div class="panel">
+        <h3>Checkbox</h3>
+        <div class="stack">
+          <label class="check"><input type="checkbox" checked />Show message previews</label>
+          <label class="check"><input type="checkbox" />Play sound on new message</label>
+          <label class="check"><input type="checkbox" id="indet" />Select all chats</label>
+          <label class="check"><input type="checkbox" disabled />Sync to cloud <span class="badge badge-outline">never</span></label>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Radio</h3>
+        <div class="stack" role="radiogroup" aria-label="Keep history">
+          <label class="radio"><input type="radio" name="hist" checked />Keep forever</label>
+          <label class="radio"><input type="radio" name="hist" />Delete after 30 days</label>
+          <label class="radio"><input type="radio" name="hist" />Delete after 24 hours</label>
+          <label class="radio"><input type="radio" name="hist" disabled />Delete on read</label>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Switch</h3>
+        <div class="stack">
+          <label class="switch"><input type="checkbox" role="switch" checked />Discoverable on LAN</label>
+          <label class="switch"><input type="checkbox" role="switch" />Allow relay fallback</label>
+          <label class="switch"><input type="checkbox" role="switch" checked disabled />End-to-end encryption</label>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Option cards</h3>
+        <div class="stack">
+          <label class="option-card radio"><input type="radio" name="conn" checked /><span>Direct only<span class="option-desc">Never use a relay. Peers must be reachable.</span></span></label>
+          <label class="option-card radio"><input type="radio" name="conn" /><span>Direct, relay fallback<span class="option-desc">Relays carry ciphertext only.</span></span></label>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Segmented</h3>
+        <div class="stack">
+          <div class="segmented" role="radiogroup" aria-label="Filter">
+            <label><input type="radio" name="seg" checked /><span>All</span></label>
+            <label><input type="radio" name="seg" /><span>Unread</span></label>
+            <label><input type="radio" name="seg" /><span>Requests</span></label>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Range</h3>
+        <div class="field">
+          <label for="f-range">Text size <span class="mono" id="f-range-out" style="float:right;color:var(--text-muted)">15px</span></label>
+          <input id="f-range" class="range" type="range" min="12" max="20" value="15" />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ FEEDBACK -->
+  <section aria-labelledby="s-feedback">
+    <div class="section-head">
+      <h2 id="s-feedback">Feedback</h2>
+      <p>Alerts · badges · progress · toasts</p>
+    </div>
+    <div class="grid grid-2">
+      <div class="panel stack">
+        <div class="alert alert-info" role="status"><svg><use href="#i-info"/></svg><div><strong>Relay in use</strong><p>Direct path unavailable. Traffic stays encrypted.</p></div></div>
+        <div class="alert alert-success" role="status"><svg><use href="#i-circle-check"/></svg><div><strong>Contact verified</strong><p>Safety numbers match on both devices.</p></div></div>
+        <div class="alert alert-warning" role="status"><svg><use href="#i-alert"/></svg><div><strong>Key changed</strong><p>Verify Alice again before sending anything sensitive.</p></div></div>
+        <div class="alert alert-danger" role="alert"><svg><use href="#i-alert"/></svg><div><strong>Storage locked</strong><p>The keychain refused access. Nothing was written.</p></div></div>
+      </div>
+      <div class="panel stack">
+        <h3>Badges</h3>
+        <div class="row">
+          <span class="badge">Default</span>
+          <span class="badge badge-solid">New</span>
+          <span class="badge badge-outline">Outline</span>
+          <span class="badge badge-success"><span class="dot"></span>Online</span>
+          <span class="badge badge-warning"><span class="dot"></span>Relay</span>
+          <span class="badge badge-danger"><span class="dot"></span>Offline</span>
+          <span class="count">3</span>
+        </div>
+        <h3 style="margin-top:8px">Chips</h3>
+        <div class="row">
+          <span class="chip">alice<button aria-label="Remove alice"><svg width="12" height="12"><use href="#i-x"/></svg></button></span>
+          <span class="chip">bob<button aria-label="Remove bob"><svg width="12" height="12"><use href="#i-x"/></svg></button></span>
+        </div>
+        <h3 style="margin-top:8px">Progress</h3>
+        <div class="progress" role="progressbar" aria-valuenow="64" aria-valuemin="0" aria-valuemax="100" aria-label="Import"><span style="width:64%"></span></div>
+        <div class="progress indeterminate" role="progressbar" aria-label="Connecting"><span></span></div>
+        <div class="row">
+          <span class="spinner spinner-lg" role="status" aria-label="Loading"></span>
+          <button class="btn btn-secondary" id="toast-btn">Show toast</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ NAV -->
+  <section aria-labelledby="s-nav">
+    <div class="section-head">
+      <h2 id="s-nav">Navigation</h2>
+      <p>Tabs · sidebar · links · shortcuts</p>
+    </div>
+    <div class="grid grid-2">
+      <div class="panel">
+        <div class="tabs" role="tablist" aria-label="Contact details">
+          <button class="tab" role="tab" aria-selected="true" aria-controls="tp-1" id="t-1">Overview</button>
+          <button class="tab" role="tab" aria-selected="false" aria-controls="tp-2" id="t-2" tabindex="-1">Security</button>
+          <button class="tab" role="tab" aria-selected="false" aria-controls="tp-3" id="t-3" tabindex="-1">Media</button>
+        </div>
+        <div class="tab-panel" role="tabpanel" id="tp-1" aria-labelledby="t-1">Alice joined as a contact on 12 Nov. Reachable over LAN and relay. <a href="#s-nav">View connection log</a>.</div>
+        <div class="tab-panel" role="tabpanel" id="tp-2" aria-labelledby="t-2" hidden>Identity key verified in person. Messages are end-to-end encrypted.</div>
+        <div class="tab-panel" role="tabpanel" id="tp-3" aria-labelledby="t-3" hidden>No shared media yet.</div>
+        <hr />
+        <p class="t-small" style="margin:0">Press <kbd>Ctrl</kbd> + <kbd>K</kbd> to search, <kbd>Esc</kbd> to close.</p>
+      </div>
+      <div class="panel">
+        <ul class="nav-list">
+          <li><a href="#s-nav" aria-current="page"><svg><use href="#i-chat"/></svg>Chats<span class="count">3</span></a></li>
+          <li><a href="#s-nav"><svg><use href="#i-users"/></svg>Contacts</a></li>
+          <li><a href="#s-nav"><svg><use href="#i-wifi"/></svg>Network</a></li>
+          <li><a href="#s-nav"><svg><use href="#i-gear"/></svg>Settings</a></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ DATA -->
+  <section aria-labelledby="s-data">
+    <div class="section-head">
+      <h2 id="s-data">Data display</h2>
+      <p>Avatars · lists · cards · IDs · empty and loading states</p>
+    </div>
+    <div class="grid grid-2">
+      <div class="stack">
+        <div class="panel">
+          <h3>Avatars &amp; presence</h3>
+          <div class="row">
+            <span class="avatar avatar-sm">A<span class="presence online"></span></span>
+            <span class="avatar">B<span class="presence away"></span></span>
+            <span class="avatar avatar-lg">C<span class="presence"></span></span>
+          </div>
+        </div>
+        <ul class="list" role="listbox" aria-label="Chats">
+          <li role="option" aria-selected="true">
+            <span class="avatar">A<span class="presence online"></span></span>
+            <span class="meta"><span class="name">Alice</span> <span class="trust verified"><svg><use href="#i-shield"/></svg></span><div class="sub">Sounds good, see you at the meetup</div></span>
+            <span class="time">09:41</span>
+          </li>
+          <li role="option" aria-selected="false">
+            <span class="avatar">B<span class="presence away"></span></span>
+            <span class="meta"><span class="name">Bob</span><div class="sub">You: sent the ticket</div></span>
+            <span class="stack" style="gap:4px;align-items:flex-end"><span class="time">Mon</span><span class="count">2</span></span>
+          </li>
+          <li role="option" aria-selected="false">
+            <span class="avatar">C<span class="presence"></span></span>
+            <span class="meta"><span class="name">Carol</span> <span class="badge badge-warning">Request</span><div class="sub">Wants to connect</div></span>
+            <span class="time">Sun</span>
+          </li>
+        </ul>
+      </div>
+      <div class="stack">
+        <div class="card">
+          <div class="card-body">
+            <h4>Your identity</h4>
+            <p style="margin-bottom:12px">Share this ID so others can reach you directly.</p>
+            <div class="node-id"><span class="grp">k51qzi5u</span> <span class="grp">qu5dgutd</span> <span class="grp">k6i1ynyz</span> <span class="grp">gkqngpha</span></div>
+          </div>
+          <div class="card-foot">
+            <button class="btn btn-ghost btn-sm">Show QR</button>
+            <button class="btn btn-primary btn-sm">Share ticket</button>
+          </div>
+        </div>
+        <div class="empty">
+          <svg><use href="#i-users"/></svg>
+          <h4>No contacts yet</h4>
+          <p>Paste a ticket or find people on your local network.</p>
+          <button class="btn btn-primary btn-sm"><svg><use href="#i-plus"/></svg>Add contact</button>
+        </div>
+        <div class="panel" aria-busy="true" aria-label="Loading">
+          <div class="row" style="flex-wrap:nowrap">
+            <span class="skeleton" style="width:40px;height:40px;border-radius:50%;flex:none"></span>
+            <span class="stack" style="flex:1;gap:8px"><span class="skeleton" style="height:12px;width:40%"></span><span class="skeleton" style="height:10px;width:75%"></span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ MESSENGER -->
+  <section aria-labelledby="s-chat">
+    <div class="section-head">
+      <h2 id="s-chat">Conversation</h2>
+      <p>Bubbles · delivery state · composer</p>
+    </div>
+    <div class="chat">
+      <div class="chat-head">
+        <span class="avatar">A<span class="presence online"></span></span>
+        <span class="meta"><div class="name">Alice <span class="trust verified"><svg><use href="#i-shield"/></svg>Verified</span></div><div class="sub">Online · direct connection</div></span>
+        <button class="btn btn-ghost btn-icon" aria-label="Search in chat"><svg><use href="#i-search"/></svg></button>
+        <button class="btn btn-ghost btn-icon" aria-label="Chat options"><svg><use href="#i-dots"/></svg></button>
+      </div>
+      <div class="chat-body">
+        <span class="e2e-note"><svg><use href="#i-lock"/></svg>Messages are end-to-end encrypted. No server stores them.</span>
+        <span class="day">Today</span>
+        <div class="bubble in">Hey! Did the ticket work?<div class="stamp">09:38</div></div>
+        <div class="bubble out">Yes, we're connected directly over the LAN now.<div class="stamp">09:39 <svg aria-label="Read"><use href="#i-check2"/></svg></div></div>
+        <div class="bubble in">Sounds good, see you at the meetup<div class="stamp">09:41</div></div>
+        <div class="bubble out">Bringing the laptop<div class="stamp">09:41 <svg aria-label="Delivered"><use href="#i-check"/></svg></div></div>
+        <div class="bubble out failed">and the spare keyboard<div class="stamp">09:42</div></div>
+        <div class="bubble-error"><svg width="14" height="14"><use href="#i-alert"/></svg>Not delivered. Peer offline. <button type="button">Retry</button></div>
+        <div class="typing" aria-label="Alice is typing"><i></i><i></i><i></i></div>
+      </div>
+      <form class="composer" onsubmit="return false">
+        <button class="btn btn-ghost btn-icon" type="button" aria-label="Attach"><svg><use href="#i-plus"/></svg></button>
+        <label for="f-compose" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Message</label>
+        <textarea id="f-compose" class="textarea" rows="1" placeholder="Write a message"></textarea>
+        <button class="btn btn-primary btn-icon" type="submit" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============================================================ DIALOG -->
+  <section aria-labelledby="s-dialog">
+    <div class="section-head">
+      <h2 id="s-dialog">Dialog</h2>
+      <p>Destructive actions confirm with a secondary-first layout</p>
+    </div>
+    <div class="grid grid-2">
+      <div class="dialog dialog-static">
+        <div class="dialog-body">
+          <h3>Clear history with Bob?</h3>
+          <p>This removes every message on this device. Bob keeps their copy. This can't be undone.</p>
+        </div>
+        <div class="dialog-foot">
+          <button class="btn btn-ghost">Cancel</button>
+          <button class="btn btn-danger">Clear history</button>
+        </div>
+      </div>
+      <div class="panel stack" style="justify-content:center;align-items:flex-start">
+        <p style="margin:0">Modal dialogs use the native <code>&lt;dialog&gt;</code> element: focus is trapped and <kbd>Esc</kbd> closes it.</p>
+        <button class="btn btn-secondary" id="open-dialog">Open dialog</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>p2p messenger · visual identity · GPL-3.0-only</footer>
+
+<dialog class="dialog" id="dlg" aria-labelledby="dlg-title">
+  <form method="dialog">
+    <div class="dialog-body stack">
+      <h3 id="dlg-title">Accept contact request?</h3>
+      <p>Carol wants to connect. Compare this fingerprint with theirs before accepting.</p>
+      <div class="node-id"><span class="grp">7f3a</span> <span class="grp">2b9e</span> <span class="grp">c04d</span> <span class="grp">91aa</span></div>
+      <label class="check"><input type="checkbox" />I compared the fingerprint in person</label>
+    </div>
+    <div class="dialog-foot">
+      <button class="btn btn-ghost" value="cancel">Decline</button>
+      <button class="btn btn-primary" value="ok">Accept</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast-region" id="toasts" aria-live="polite"></div>
+
+<script>
+(() => {
+  const root = document.documentElement;
+  const KEY = "p2pm-theme";
+  const THEMES = ["dark", "light", "midnight"];
+
+  /* ---------- Theme switching ---------- */
+  function applyTheme(name) {
+    if (!THEMES.includes(name)) name = "dark";
+    root.dataset.theme = name;
+    document.querySelectorAll('input[name="theme"]').forEach(r => { r.checked = r.value === name; });
+    document.querySelectorAll(".preview").forEach(p => p.setAttribute("aria-pressed", String(p.dataset.pick === name)));
+    try { localStorage.setItem(KEY, name); } catch (_) {}
+    renderSwatches();
+  }
+
+  document.querySelectorAll('input[name="theme"]').forEach(r =>
+    r.addEventListener("change", () => applyTheme(r.value)));
+  document.querySelectorAll(".preview").forEach(p =>
+    p.addEventListener("click", () => applyTheme(p.dataset.pick)));
+
+  /* ---------- Swatches with live contrast ---------- */
+  const TOKENS = [
+    ["--bg", "Background"],
+    ["--surface", "Surface"],
+    ["--surface-2", "Surface 2"],
+    ["--border", "Border"],
+    ["--border-strong", "Border strong"],
+    ["--text", "Text"],
+    ["--text-strong", "Text strong"],
+    ["--text-muted", "Text muted"],
+    ["--accent", "Accent"],
+    ["--accent-hover", "Accent hover"],
+    ["--success", "Success"],
+    ["--warning", "Warning"],
+    ["--danger", "Danger"],
+    ["--bubble-out", "Bubble out"],
+  ];
+
+  function lum(hex) {
+    const n = hex.replace("#", "");
+    return [0, 2, 4]
+      .map(i => parseInt(n.slice(i, i + 2), 16) / 255)
+      .map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+      .reduce((acc, c, i) => acc + c * [0.2126, 0.7152, 0.0722][i], 0);
+  }
+  function ratio(a, b) {
+    const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m);
+    return (x + 0.05) / (y + 0.05);
+  }
+
+  function renderSwatches() {
+    const css = getComputedStyle(root);
+    const bg = css.getPropertyValue("--bg").trim();
+    const host = document.getElementById("swatches");
+    host.innerHTML = "";
+    // Surfaces and borders are not text colours, so their ratio is informational only.
+    const nonText = new Set(["--bg", "--surface", "--surface-2", "--border", "--border-strong", "--bubble-out"]);
+    for (const [token, label] of TOKENS) {
+      const val = css.getPropertyValue(token).trim();
+      const r = ratio(val, bg);
+      const cls = nonText.has(token) ? "na" : r >= 4.5 ? "pass" : r >= 3 ? "large" : "";
+      const el = document.createElement("div");
+      el.className = "swatch";
+      el.innerHTML =
+        `<div class="swatch-chip" style="background:${val}"></div>` +
+        `<div class="swatch-info"><span class="ratio ${cls}">${token === "--bg" ? "" : r.toFixed(2)}</span>` +
+        `<strong>${label}</strong><span class="mono">${token}<br>${val.toUpperCase()}</span></div>`;
+      host.appendChild(el);
+    }
+  }
+
+  /* ---------- Small interactions ---------- */
+  document.getElementById("indet").indeterminate = true;
+
+  const range = document.getElementById("f-range");
+  const out = document.getElementById("f-range-out");
+  const syncRange = () => {
+    const pct = ((range.value - range.min) / (range.max - range.min)) * 100;
+    range.style.setProperty("--pct", pct + "%");
+    out.textContent = range.value + "px";
+  };
+  range.addEventListener("input", syncRange);
+  syncRange();
+
+  document.querySelectorAll("[data-reveal]").forEach(btn => btn.addEventListener("click", () => {
+    const input = document.getElementById(btn.dataset.reveal);
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    btn.setAttribute("aria-label", show ? "Hide passphrase" : "Show passphrase");
+  }));
+
+  // Tabs with arrow-key navigation
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  function selectTab(tab) {
+    tabs.forEach(t => {
+      const on = t === tab;
+      t.setAttribute("aria-selected", String(on));
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+    });
+    tab.focus();
+  }
+  tabs.forEach((t, i) => {
+    t.addEventListener("click", () => selectTab(t));
+    t.addEventListener("keydown", e => {
+      if (e.key === "ArrowRight") selectTab(tabs[(i + 1) % tabs.length]);
+      if (e.key === "ArrowLeft") selectTab(tabs[(i - 1 + tabs.length) % tabs.length]);
+    });
+  });
+
+  // List selection
+  document.querySelectorAll(".list li").forEach(li => li.addEventListener("click", () => {
+    li.parentElement.querySelectorAll("li").forEach(x => x.setAttribute("aria-selected", String(x === li)));
+  }));
+
+  // Chips
+  document.querySelectorAll(".chip button").forEach(b => b.addEventListener("click", () => b.parentElement.remove()));
+
+  // Toast
+  document.getElementById("toast-btn").addEventListener("click", () => {
+    const t = document.createElement("div");
+    t.className = "toast";
+    t.innerHTML = '<svg><use href="#i-circle-check"/></svg><span>Ticket shared</span><button class="btn btn-ghost btn-sm">Undo</button>';
+    t.querySelector("button").addEventListener("click", () => t.remove());
+    document.getElementById("toasts").appendChild(t);
+    setTimeout(() => t.remove(), 4000);
+  });
+
+  // Dialog
+  const dlg = document.getElementById("dlg");
+  document.getElementById("open-dialog").addEventListener("click", () => dlg.showModal());
+
+  /* ---------- Initial theme ---------- */
+  applyTheme(root.dataset.theme);
+})();
+</script>
+</body>
+</html>

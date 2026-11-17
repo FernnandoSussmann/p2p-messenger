@@ -22,6 +22,8 @@ Svelte UI for one coherent feature.
 | 4 | [Messaging & Delivery](04-messaging-and-delivery.md) | `messaging` | `core::messaging`, `protocol`, `app` |
 | 5 | [Encrypted Storage & Diagnostic Logging](05-encrypted-storage-and-logging.md) | cross-cutting | `core` (storage, logging) |
 | 6 | [Lean Build Footprint, Self-Cleaning Test Gate & End-User Binary](06-lean-build-footprint.md) | cross-cutting | build/test/release tooling, `app` |
+| 7 | [Visual Identity & UX Redesign](07-visual-identity-and-ux-redesign.md) | `identity` (theme setting) + UI | `core::identity`, `app` |
+| 8 | [Outgoing Delivery Time](08-outgoing-delivery-time.md) | `messaging` | `core::messaging`, `app` |
 
 ## Conventions shared by all docs
 
@@ -46,6 +48,9 @@ Svelte UI for one coherent feature.
 
 All six docs are v1 drafts targeting the desktop build (Linux/macOS/Windows);
 DD-03 is implemented, with the deviations listed in its Status line. DD-06 is implemented (see its Implementation notes).
+DD-07 (visual identity and UX redesign, based on
+[`../design/visual-identity.html`](../design/visual-identity.html)) and DD-08 (outgoing delivery
+time) are drafts, to be implemented in that order.
 Mobile/web, attachments, offline store-and-forward, QR *scanning*, multiple
 identities, passphrase-at-rest, and multi-device sync are **out of scope** for
 v1 (see each doc's non-goals).
