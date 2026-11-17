@@ -125,6 +125,7 @@
         type="button"
         class="btn btn-ghost btn-sm btn-icon"
         aria-label="Rename"
+        disabled={!contact}
         onclick={() => {
           renameError = null;
           renaming = !renaming;
@@ -136,12 +137,15 @@
         type="button"
         class="btn btn-danger btn-sm btn-icon"
         aria-label="Remove…"
+        disabled={!contact}
         onclick={() => (removalTarget = contact ?? null)}
       >
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
       </button>
     </header>
 
+    <!-- A contact removed elsewhere while a dialog is open: nothing but Back stays usable. -->
+    <fieldset class="contact-info-body stack" disabled={!contact}>
     {#if renaming && contact}
       <NicknameForm
         initial={contact.nickname}
@@ -229,5 +233,6 @@
         }}
       />
     {/if}
+    </fieldset>
   </section>
 {/if}

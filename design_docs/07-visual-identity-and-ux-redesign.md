@@ -2,7 +2,7 @@
 
 **Feature slice:** `core::identity` (theme preference in account settings) + `app` (one shared stylesheet,
 themes, setup screen, app shell and navigation, Discover tab, contact list, conversation, new contact info screen)
-**Status:** Draft
+**Status:** Implemented (see Implementation notes)
 **Affected:** `core/src/identity/` (settings trait, SQLCipher store, memory store, service),
 `core/src/storage/schema.rs` (one new migration), `app/src-tauri/src/identity_cmd.rs`, `app/src-tauri/src/lib.rs`,
 `app/index.html`, `app/src/main.ts`, a new global stylesheet, `app/src/lib/router.ts`, `app/src/lib/chatStore.ts`,
@@ -10,7 +10,7 @@ a new `lib/theme.ts`, every `app/src/views/*.svelte` (restyled, several re-laid 
 `ContactInfo.svelte`, their `*.test.ts`, the frontend guard tests, `README.md`, and the removal of `design/wireframes/`
 **Wire format:** unchanged — no `PROTOCOL_VERSION` bump. The theme never leaves the device.
 **Reference:** [`design/visual-identity.html`](../design/visual-identity.html) (approved component sheet, three themes; kept)
-Every layout decision they carried is written down below, so this doc stands on its own once they are gone.
+The wireframe images this design started from have been deleted; every layout decision they carried is written down below, so this doc stands on its own.
 **Followed by:** [DD-08 Outgoing Delivery Time](08-outgoing-delivery-time.md) (adds the delivered time to the
 outgoing bubbles designed here)
 **Related:** [DD-01 Identity & My Info](01-identity-onboarding-and-my-info.md),
@@ -480,10 +480,40 @@ its structure and text and switches to the shared classes:
 ### Removing the wireframes
 
 The images in `design/wireframes/` were inputs for this doc only. Their content is captured above
-(layout sketches, element order, text mapping), so they are deleted in the final change of this
+(layout sketches, element order, text mapping), so they were deleted in the final change of this
 work, and every link to them is removed (this doc's header line and the README status paragraph).
 `design/visual-identity.html` is **not** deleted: it is the living visual spec the drift guard
 checks against.
+
+## Implementation notes
+
+Deviations and interpretations actually taken in the code:
+
+- Light `--success` is `#1C7347` (user decision), with an extra contrast pair (tint over `--bg`).
+- `identity_theme_set` takes a string so a bad value returns `InvalidTheme`. Theme errors use the
+  existing `IdentityCmdError` mapping (`Internal` / `RecoverableErrorState`); there are no
+  `NotProvisioned` / `StoreUnavailable` variants, and `NotProvisioned` maps to `Internal`.
+- `loadTheme()` prefers an unsaved `pendingTheme` (a failed save during setup applies for the session).
+  `AlreadyProvisioned` on setup also skips the theme write and clears `pendingTheme`.
+- Midnight is applied on a fresh launch for the loading, error and storage screens; an in-session
+  retry keeps the previously applied theme.
+- Setup is `FirstRunWizard.svelte` and the shell is `MainScreen.svelte` (no `Setup`/`Shell` files);
+  `Discover.svelte` is a new file. The edited empty state keeps `<em>Discover</em>` markup.
+- The Connections move was done with the Network re-layout in step 07-02, not 07-03.
+- The menu is hidden on drill-in screens (user decision); focus stays on the tab for arrow-key tab changes.
+- Separators are ` | ` (and `·` where noted).
+- Conversation height uses `calc(100vh - ...)` because the stylesheet guard forbids `:has()`.
+- The contacts store has no loaded flag, so the redirect for a missing contact fires once the contact
+  is seen or the store is non-empty. Removed contacts are never displayed (drill-ins redirect to
+  Contacts, "This contact was removed." dropped, no Clear history); kept history returns when the
+  same NodeId is re-added (user decision).
+- The focus ring is the DD `--focus` 3px 40% halo, which is below 3:1 non-text contrast, as the DD specifies.
+- The contrast guard does not cover `text-muted` on `--surface-2`; no current usage exists.
+- No `@media` rules for narrow widths: the layout reflows via flex-wrap and was not visually verified.
+- The manual two-instance GUI checklist was not run.
+- Wireframe mentions in this doc are kept as history.
+
+---
 
 ## Security and privacy
 
@@ -637,30 +667,30 @@ One doc, delivered in reviewable PRs, each leaving the app working:
 
 ## Definition of done
 
-- [ ] One global stylesheet imported once; `index.html` defaults to `data-theme="midnight"`; no
+- [x] One global stylesheet imported once; `index.html` defaults to `data-theme="midnight"`; no
       `.svelte` file has a `<style>` block, `style=` attribute or `style:` directive.
-- [ ] Token values equal `design/visual-identity.html` (drift guard); no `color-mix()` / `:has()`.
-- [ ] Migration adds `account_settings.theme` with the `CHECK`; `Theme` enum, both settings stores
+- [x] Token values equal `design/visual-identity.html` (drift guard); no `color-mix()` / `:has()`.
+- [x] Migration adds `account_settings.theme` with the `CHECK`; `Theme` enum, both settings stores
       and `IdentityService` updated.
-- [ ] `identity_theme_get` / `identity_theme_set` implemented, registered, invoked and tested.
-- [ ] `theme.ts` and `ThemePicker` done; picker on setup and My Info; theme applied before the shell
+- [x] `identity_theme_get` / `identity_theme_set` implemented, registered, invoked and tested.
+- [x] `theme.ts` and `ThemePicker` done; picker on setup and My Info; theme applied before the shell
       renders; Midnight on every pre-account screen.
-- [ ] `screen` store with Back chains contact-info → chat → Contacts and focus management.
-- [ ] Shell with Contacts | Discover | Network | My Info; menu and footer on tab screens only
+- [x] `screen` store with Back chains contact-info → chat → Contacts and focus management.
+- [x] Shell with Contacts | Discover | Network | My Info; menu and footer on tab screens only
       (hidden on drill-ins); prompts everywhere.
-- [ ] Setup screen as specified (conditional arrow, provision → name → theme → Contacts, retry
+- [x] Setup screen as specified (conditional arrow, provision → name → theme → Contacts, retry
       without re-provisioning).
-- [ ] Discover hosts the LAN list (inline nickname + Add) and the non-contact Connections group.
-- [ ] Network and My Info re-laid out; Network Connections list removed.
-- [ ] Contact rows redesigned with no action buttons; conversation redesigned; `ContactInfo.svelte`
+- [x] Discover hosts the LAN list (inline nickname + Add) and the non-contact Connections group.
+- [x] Network and My Info re-laid out; Network Connections list removed.
+- [x] Contact rows redesigned with no action buttons; conversation redesigned; `ContactInfo.svelte`
       with every per-contact action, reusing existing commands and dialogs.
-- [ ] Text inventory matches the implementation exactly; the two listed edits are the only edits to
+- [x] Text inventory matches the implementation exactly; the two listed edits are the only edits to
       existing text (reviewed in the PR).
-- [ ] Single-stylesheet, contrast, drift, no-hardcoded-colour, no-web-storage and extended render
+- [x] Single-stylesheet, contrast, drift, no-hardcoded-colour, no-web-storage and extended render
       guards green; `html-guard`, `clipboard-guard`, log-redaction, SQL-namespacing and secret grep
       gates green; CSP unchanged.
-- [ ] All tests listed above added or updated and green.
-- [ ] `design/wireframes/` deleted; no Markdown link, import or code reference points into it.
-- [ ] README: themes, screen structure, contact info path and manual checklist updated.
-- [ ] Pre-commit hook passes (fmt, clippy `-D warnings`, workspace tests, frontend
+- [x] All tests listed above added or updated and green.
+- [x] `design/wireframes/` deleted; no Markdown link, import or code reference points into it.
+- [x] README: themes, screen structure, contact info path and manual checklist updated.
+- [x] Pre-commit hook passes (fmt, clippy `-D warnings`, workspace tests, frontend
       check/test/build).
