@@ -62,3 +62,10 @@ it("no color-mix or :has in the stylesheet or components", () => {
     expect(text).not.toContain(":has(");
   }
 });
+
+it("the only runtime style write is the composer height", () => {
+  const writes = Object.entries(scripts)
+    .filter(([p]) => !p.endsWith(".test.ts"))
+    .flatMap(([p, t]) => [...t.matchAll(/\.style\.(\w+)/g)].map((m) => `${p}:${m[1]}`));
+  expect(new Set(writes)).toEqual(new Set(["/src/views/Composer.svelte:height"]));
+});

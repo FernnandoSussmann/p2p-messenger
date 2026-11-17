@@ -315,7 +315,7 @@ hr, .divider { border: 0; border-top: 1px solid var(--border); margin: var(--spa
 }
 
 /* Messenger */
-.chat-log { list-style: none; display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; padding: var(--space-3) 0; }
+.chat-log { list-style: none; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; padding: var(--space-3) 0; }
 .bubble { max-width: 75%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-lg); font-size: 14px; line-height: 1.45; }
 .bubble.in { align-self: flex-start; background: var(--bubble-in); color: var(--bubble-in-text); border: 1px solid var(--border); border-bottom-left-radius: var(--space-1); }
 .bubble.out { align-self: flex-end; background: var(--bubble-out); color: var(--bubble-out-text); border: 1px solid transparent; border-bottom-right-radius: var(--space-1); }
@@ -384,3 +384,32 @@ hr, .divider { border: 0; border-top: 1px solid var(--border); margin: var(--spa
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* contact row */
+.list > li.contact-item { padding: 0; }
+.contact-row {
+  display: flex; align-items: center; gap: var(--space-3); width: 100%;
+  padding: var(--space-3) 14px; border: 1px solid transparent; border-radius: var(--radius);
+  background: transparent; color: var(--text-strong); font: inherit; text-align: left; cursor: pointer;
+}
+.contact-row:hover { border-color: var(--border-strong); }
+.contact-row .contact-name { flex: 1 1 auto; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contact-row .contact-conn { flex: 0 1 auto; font-size: 13px; }
+.contact-row .chip { flex: none; }
+/* end contact row */
+
+/* conversation */
+.conversation { display: flex; flex-direction: column; gap: var(--space-2); height: calc(100vh - var(--space-5) - var(--space-6)); min-height: 0; }
+.conversation .chat-log { flex: 1; min-height: 0; }
+.conv-header { display: flex; align-items: center; gap: var(--space-2); }
+.conv-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-info { margin-left: auto; }
+.bubble .who { display: block; text-align: right; font-size: 12px; font-weight: 600; }
+.composer-row { display: flex; align-items: flex-end; gap: var(--space-2); }
+.composer-row .textarea { flex: 1; resize: none; min-height: var(--h); max-height: 160px; }
+/* end conversation */
+
+/* contact info */
+.contact-info-head { flex-wrap: nowrap; }
+.contact-info-name { margin: 0; font-size: inherit; flex: 1 1 auto; min-width: 0; }
+/* end contact info */
