@@ -481,6 +481,8 @@ mod tests {
 
         let provisioned = provision(&service).unwrap();
         set_display_name(&service, "Alice").unwrap();
+        theme_set(&service, "light").unwrap();
+        assert_eq!(theme_get(&service).unwrap().theme, "light");
         let info = my_info(&service).unwrap();
         assert_eq!(info.display_name.as_deref(), Some("Alice"));
         assert_eq!(info.node_id, provisioned.node_id);
@@ -518,6 +520,7 @@ mod tests {
         let service = build();
         let provisioned = provision(&service).unwrap();
         set_display_name(&service, "Alice").unwrap();
+        theme_set(&service, "light").unwrap();
         assert_eq!(
             my_info(&service).unwrap().display_name.as_deref(),
             Some("Alice")
@@ -533,6 +536,7 @@ mod tests {
             my_info(&restarted).unwrap().display_name.as_deref(),
             Some("Alice")
         );
+        assert_eq!(theme_get(&restarted).unwrap().theme, "light");
         assert!(dir.path().join(messenger_core::storage::DB_FILE).exists());
         assert!(!dir.path().join("settings.json").exists());
     }

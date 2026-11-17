@@ -16,13 +16,12 @@ vi.mock("../lib/contactsStore", async () => {
     contacts,
     contactIds: derived(contacts, (c) => new Set(c.map((x) => x.node_id))),
     expectNaming: vi.fn(),
-    requestNaming: vi.fn(),
   };
 });
 
 import Network from "./Network.svelte";
 import { connections, lanPeers } from "../lib/netStore";
-import { contacts, expectNaming, requestNaming } from "../lib/contactsStore";
+import { contacts, expectNaming } from "../lib/contactsStore";
 import { netConnectTicket } from "../net";
 
 const BTN = "Connect and remember this device";
@@ -34,7 +33,6 @@ beforeEach(() => {
   lanPeers.set([]);
   (contacts as any).set([]);
   vi.mocked(expectNaming).mockReset();
-  vi.mocked(requestNaming).mockReset();
 });
 
 describe("Network", () => {
@@ -70,28 +68,6 @@ describe("Network", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("That's your own ticket.");
   });
 
-  it("updates the connection list when the store changes", async () => {
-    render(Network);
-    expect(screen.queryAllByTestId("connection")).toHaveLength(0);
-    connections.set({
-      abc: { node_id: "abc", direction: "outbound", state: "failed", reason: "declined", display_name: null },
-    });
-    await waitFor(() => expect(screen.getAllByTestId("connection")).toHaveLength(1));
-    expect(screen.getByText("abc")).toBeTruthy();
-    expect(screen.getByTestId("conn-state")).toHaveTextContent("failed");
-    expect(screen.getByTestId("conn-reason")).toHaveTextContent("declined");
-  });
-
-  it("renders a hostile peer id as inert text", async () => {
-    const evil = "<b>x</b>‮";
-    connections.set({
-      [evil]: { node_id: evil, direction: "inbound", state: "connected", reason: null, display_name: null },
-    });
-    const { container } = render(Network);
-    expect(await screen.findByTestId("connection")).toHaveTextContent(evil);
-    expect(container.querySelector("li b")).toBeNull();
-  });
-
   it("successful connect expects naming for the dialed node", async () => {
     render(Network);
     const field = screen.getByLabelText("Connect by ticket") as HTMLTextAreaElement;
@@ -106,27 +82,29 @@ describe("Network", () => {
     expect(screen.getByText(/saved as an unverified contact under the name they gave/)).toBeInTheDocument();
   });
 
-  const conn = (id: string, name: string | null) => ({
-    node_id: id,
-    direction: "outbound" as const,
-    state: "connected" as const,
-    reason: null,
-    display_name: name,
+  it("lays out switch, captions, explanation, ticket field, button and paragraph in order", () => {
+    const { container } = render(Network);
+    const sw = screen.getByRole("switch", { name: "Visible on this network" });
+    expect(screen.getByText("Off")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByText("On")).toHaveAttribute("aria-hidden", "true");
+    const explanation = screen.getByText(/You are/);
+    const field = screen.getByLabelText("Connect by ticket");
+    const button = screen.getByRole("button", { name: BTN });
+    const para = screen.getByText(/saved as an unverified contact/);
+    const order = [sw, explanation, field, button, para];
+    for (let i = 0; i < order.length - 1; i++) {
+      expect(order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(container.querySelector("hr.divider")).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "Network", level: 2 })).toHaveClass("visually-hidden");
   });
 
-  it("connected non-contact row offers Add contact and requests naming with its display_name", async () => {
-    connections.set({ p1: conn("p1", "Pat") });
+  it("no longer shows Connections", () => {
+    connections.set({ p1: { node_id: "p1", direction: "outbound", state: "connected", reason: null, display_name: null } });
     render(Network);
-    await fireEvent.click(await screen.findByRole("button", { name: "Add contact…" }));
-    expect(requestNaming).toHaveBeenCalledWith("p1", "Pat");
-  });
-
-  it("contact rows do not offer Add contact", async () => {
-    (contacts as any).set([{ node_id: "p1" }]);
-    connections.set({ p1: conn("p1", "Pat") });
-    render(Network);
-    await screen.findByTestId("connection");
-    expect(screen.queryByRole("button", { name: "Add contact…" })).toBeNull();
+    expect(screen.queryByText("Connections")).toBeNull();
+    expect(screen.queryByText("No connections yet.")).toBeNull();
+    expect(screen.queryByTestId("connection")).toBeNull();
   });
 
   it("LAN list is no longer on the Network tab", () => {

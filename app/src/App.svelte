@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { describeError, identityStatus } from "./identity";
-  import { appView, wizardView as Wizard } from "./lib/router";
+  import { appView, resetScreen } from "./lib/router";
   import { loadTheme } from "./lib/theme";
   import { storageStatus } from "./storage";
+  import FirstRunWizard from "./views/FirstRunWizard.svelte";
   import ErrorBlocking from "./views/ErrorBlocking.svelte";
   import MainScreen from "./views/MainScreen.svelte";
   import StorageUnavailable from "./views/StorageUnavailable.svelte";
@@ -26,6 +27,7 @@
           appView.set({ kind: "storage", message: storage.reason });
         } else {
           await loadTheme();
+          resetScreen();
           appView.set({ kind: "main" });
         }
       }
@@ -45,7 +47,7 @@
   {:else if $appView.kind === "storage"}
     <StorageUnavailable message={$appView.message} onResolved={refresh} />
   {:else if $appView.kind === "wizard"}
-    <Wizard onDone={refresh} />
+    <FirstRunWizard onDone={refresh} />
   {:else}
     <MainScreen />
   {/if}

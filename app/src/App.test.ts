@@ -139,12 +139,32 @@ describe("App view machine", () => {
     await screen.findByRole("tab", { name: "My Info" });
   });
 
+  it("first-run completion lands on the Contacts tab", async () => {
+    status.mockResolvedValue({ type: "Absent" });
+    provision.mockResolvedValue({ node_id: "n", account_id: "a" });
+    setName.mockResolvedValue(undefined);
+    render(App);
+    const input = await screen.findByLabelText("Display name");
+    status.mockResolvedValue({ type: "Present", account_id: "a", node_id: "n" });
+    await fireEvent.input(input, { target: { value: "Ada" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    const tab = await screen.findByRole("tab", { name: "Contacts" });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByText("Welcome")).toBeNull();
+  });
+
+  it("relaunch with Present lands on the Contacts tab", async () => {
+    status.mockResolvedValue({ type: "Present", account_id: "a", node_id: "n" });
+    render(App);
+    const tab = await screen.findByRole("tab", { name: "Contacts" });
+    expect(tab.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("re-checks storage when the wizard finishes", async () => {
     status.mockResolvedValue({ type: "Absent" });
     provision.mockResolvedValue({ node_id: "n", account_id: "a" });
     setName.mockResolvedValue(undefined);
     render(App);
-    await fireEvent.click(await screen.findByRole("button", { name: "Create identity" }));
     const input = await screen.findByLabelText("Display name");
     status.mockResolvedValue({ type: "Present", account_id: "a", node_id: "n" });
     storage.mockResolvedValue({ type: "Error", kind: "Io", reason: "no access" });

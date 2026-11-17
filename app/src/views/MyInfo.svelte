@@ -93,9 +93,9 @@
   }
 </script>
 
-<section>
-  <h2>My Info</h2>
-  <div class="row">
+<section class="stack">
+  <h2 class="visually-hidden" tabindex="-1" data-screen-focus>My Info</h2>
+  <div class="row my-info-head">
     {#if info}<p>Current name: <span data-testid="display-name">{info.display_name ?? ""}</span></p>{/if}
     <ThemePicker current={$theme} onChoose={pickTheme} />
   </div>
@@ -103,7 +103,7 @@
   {#if loadError}
     <p role="alert" class="alert alert-danger">{loadError}</p>
   {:else if info}
-    <form class="row" onsubmit={saveName}>
+    <form class="my-info-name" onsubmit={saveName}>
       <label class="field">
         <span>Display name</span>
         <input class="input" type="text" bind:value={draft} />
@@ -112,15 +112,21 @@
       {#if nameError}<p role="alert" class="alert alert-danger">{nameError}</p>{/if}
     </form>
 
+    <hr class="divider" />
     <h3>Connection ticket</h3>
     {#if networkStarting}<p class="muted">Network starting…</p>{/if}
-    <button type="button" class="btn" onclick={copyTicket}>Copy ticket</button>
-    <pre data-testid="ticket" class="mono-block">{info.ticket}</pre>
     <div class="qr-frame" data-testid="qr" aria-label="Ticket QR code">{@html info.qr_svg}</div>
+    <div class="my-info-center">
+      <button type="button" class="btn" onclick={copyTicket}>Copy ticket</button>
+    </div>
+    <pre data-testid="ticket" class="mono-block muted">{info.ticket}</pre>
 
+    <hr class="divider" />
     <h3>NodeId</h3>
-    <code data-testid="node-id" class="mono-block">{info.node_id}</code>
-    <button type="button" class="btn" onclick={copyNodeId}>Copy NodeId</button>
+    <code data-testid="node-id" class="node-id">{info.node_id}</code>
+    <div>
+      <button type="button" class="btn" onclick={copyNodeId}>Copy NodeId</button>
+    </div>
 
     {#if notice}<p role="status" class="alert alert-info">{notice}</p>{/if}
   {:else}

@@ -9,6 +9,7 @@ import {
   type MessageStatus,
   type MessageStatusDto,
 } from "../chat";
+import { back, screen, showChat } from "./router";
 
 export interface Conversation {
   nodeId: string;
@@ -21,9 +22,12 @@ export interface Conversation {
 const MAX_LOADED = 1000;
 const MAX_PENDING_STATUS = 256;
 
-export const activeChat = writable<string | null>(null);
 export const conversation = writable<Conversation | null>(null);
 export const unread = writable<Record<string, number>>({});
+
+screen.subscribe((s) => {
+  if (s.kind === "tab") conversation.set(null);
+});
 
 const pendingStatus = new Map<string, MessageStatus>();
 let inflight = 0;
@@ -98,13 +102,12 @@ export async function openConversation(nodeId: string): Promise<void> {
 }
 
 export function openChat(nodeId: string): Promise<void> {
-  activeChat.set(nodeId);
+  showChat(nodeId);
   return openConversation(nodeId);
 }
 
 export function closeChat() {
-  activeChat.set(null);
-  conversation.set(null);
+  back();
 }
 
 export function resetConversation(nodeId: string) {

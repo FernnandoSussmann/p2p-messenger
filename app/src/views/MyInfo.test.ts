@@ -37,6 +37,26 @@ beforeEach(() => {
 });
 
 describe("MyInfo", () => {
+  it("has a visually hidden heading and the sections in order", async () => {
+    render(MyInfo);
+    await screen.findByTestId("ticket");
+    expect(screen.getByRole("heading", { level: 2, name: "My Info" })).toHaveClass("visually-hidden");
+    const order = ["Connection ticket", "NodeId"].map((n) => screen.getByRole("heading", { name: n }));
+    expect(order[0].compareDocumentPosition(order[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId("node-id")).toHaveClass("node-id");
+    expect(screen.getAllByRole("separator")).toHaveLength(2);
+  });
+
+  it("reports copy results in one status line", async () => {
+    render(MyInfo);
+    await fireEvent.click(await screen.findByRole("button", { name: "Copy ticket" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Ticket copied");
+    vi.mocked(writeText).mockRejectedValueOnce(new Error("x"));
+    await fireEvent.click(screen.getByRole("button", { name: "Copy NodeId" }));
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.getByRole("status")).toHaveTextContent("Copy failed");
+  });
+
   it("renders name, NodeId, ticket and QR", async () => {
     render(MyInfo);
     expect(await screen.findByTestId("display-name")).toHaveTextContent("Alice");
