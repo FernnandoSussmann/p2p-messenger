@@ -1,6 +1,6 @@
 use super::*;
 use crate::identity::testing::FakeKeychain;
-use crate::identity::{DbKey, KeychainStore, MemorySettingsStore};
+use crate::identity::{DbKey, KeychainStore, MemorySettingsStore, Theme};
 
 fn name(raw: &str) -> DisplayName {
     validate_display_name(raw).unwrap()
@@ -35,6 +35,7 @@ pub(crate) fn settings_contract(store: &dyn SettingsStore, id: &AccountId) {
     assert!(store.get_provisioned_at(id).unwrap().is_none());
     assert_eq!(store.get_presence(id).unwrap(), None);
     assert_eq!(store.get_relay_url(id).unwrap(), None);
+    assert_eq!(store.get_theme(id).unwrap(), None);
 
     store.set_display_name(id, &name("Ada")).unwrap();
     assert_eq!(store.get_display_name(id).unwrap().unwrap().as_str(), "Ada");
@@ -75,6 +76,36 @@ pub(crate) fn settings_contract(store: &dyn SettingsStore, id: &AccountId) {
     );
     store.set_relay_url(id, None).unwrap();
     assert_eq!(store.get_relay_url(id).unwrap(), None);
+
+    store.set_display_name(id, &name("Grace")).unwrap();
+    store
+        .set_relay_url(id, Some("https://relay.example"))
+        .unwrap();
+    let relay_before = store.get_relay_url(id).unwrap();
+    for t in [Theme::Dark, Theme::Light, Theme::Midnight] {
+        store.set_theme(id, t).unwrap();
+        assert_eq!(store.get_theme(id).unwrap(), Some(t));
+        // set_theme never disturbs the other columns.
+        assert_eq!(
+            store.get_display_name(id).unwrap().unwrap().as_str(),
+            "Grace"
+        );
+        assert_eq!(
+            store.get_provisioned_at(id).unwrap(),
+            Some(1_700_000_000_000)
+        );
+        assert_eq!(store.get_relay_url(id).unwrap(), relay_before);
+        assert_eq!(store.get_presence(id).unwrap(), Some(true));
+    }
+    // ...and the other setters never disturb the theme.
+    store.set_theme(id, Theme::Light).unwrap();
+    store.set_display_name(id, &name("Eve")).unwrap();
+    store.set_provisioned_at(id, 7).unwrap();
+    store.set_presence(id, false).unwrap();
+    store.set_relay_url(id, None).unwrap();
+    assert_eq!(store.get_theme(id).unwrap(), Some(Theme::Light));
+    store.set_provisioned_at(id, 1_700_000_000_000).unwrap();
+    store.set_presence(id, true).unwrap();
 
     let too_long = format!("https://{}.example", "a".repeat(2100));
     for bad in [
@@ -211,4 +242,66 @@ fn hostile_strings_round_trip() {
     );
     store.set_provisioned_at(&id, 3).unwrap();
     assert_eq!(store.get_provisioned_at(&id).unwrap(), Some(3));
+}
+
+#[test]
+fn sql_theme_check_rejects_out_of_range() {
+    let id = AccountId::new();
+    let (_dir, storage, store) = with_keys(&[id]);
+    store.set_theme(&id, Theme::Dark).unwrap();
+    let db = storage.database(&id).unwrap();
+    let result = db.conn().unwrap().execute(
+        "UPDATE account_settings SET theme = 'blue' WHERE account_id = ?1",
+        params![id.as_uuid().as_bytes().as_slice()],
+    );
+    assert!(result.is_err());
+    assert_eq!(store.get_theme(&id).unwrap(), Some(Theme::Dark));
+}
+
+#[test]
+fn sql_theme_persists_across_instances() {
+    let (id, keychain) = (AccountId::new(), Arc::new(FakeKeychain::new()));
+    keychain
+        .store_db_key(&id, &DbKey::from_bytes(rand::random()))
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let storage = Arc::new(Storage::new(dir.path(), keychain.clone()));
+        SqlCipherSettingsStore::new(storage)
+            .set_theme(&id, Theme::Light)
+            .unwrap();
+    }
+    crate::identity::write_marker(dir.path(), id).unwrap();
+    let storage = Arc::new(Storage::new(dir.path(), keychain));
+    let reopened = SqlCipherSettingsStore::new(storage);
+    assert_eq!(reopened.get_theme(&id).unwrap(), Some(Theme::Light));
+}
+
+#[test]
+fn hostile_stored_theme_reads_as_none() {
+    let id = AccountId::new();
+    let (_dir, storage, store) = with_keys(&[id]);
+    store.set_theme(&id, Theme::Dark).unwrap();
+    let db = storage.database(&id).unwrap();
+    // Test-only: bypass the CHECK to model a value written behind our back.
+    // The connection guard is released before each read: `get_theme` locks the
+    // same connection and would deadlock against a held guard.
+    db.conn()
+        .unwrap()
+        .execute_batch("PRAGMA ignore_check_constraints = ON;")
+        .unwrap();
+    for bad in ["blue", "Dark", "dark ", "midnight'; DROP TABLE x;--", ""] {
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE account_settings SET theme = ?2 WHERE account_id = ?1",
+                params![id.as_uuid().as_bytes().as_slice(), bad],
+            )
+            .unwrap();
+        assert_eq!(store.get_theme(&id).unwrap(), None, "{bad:?}");
+    }
+    db.conn()
+        .unwrap()
+        .execute_batch("PRAGMA ignore_check_constraints = OFF;")
+        .unwrap();
 }

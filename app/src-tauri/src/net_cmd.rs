@@ -509,7 +509,7 @@ mod tests {
     use messenger_core::discovery::{ConnectionState, Direction, FailureReason};
     use messenger_core::identity::testing::FakeKeychain;
     use messenger_core::identity::{
-        DisplayName, IdentityService, KeychainStore, MemorySettingsStore, Ticket,
+        DisplayName, IdentityService, KeychainStore, MemorySettingsStore, Theme, Ticket,
     };
     use messenger_core::messaging::MessageStore;
 
@@ -997,6 +997,12 @@ mod tests {
                 return Err(SettingsError::Unavailable);
             }
             self.inner.get_relay_url(id)
+        }
+        fn get_theme(&self, id: &AccountId) -> Result<Option<Theme>, SettingsError> {
+            self.inner.get_theme(id)
+        }
+        fn set_theme(&self, id: &AccountId, theme: Theme) -> Result<(), SettingsError> {
+            self.inner.set_theme(id, theme)
         }
         fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError> {
             self.inner.set_relay_url(id, url)

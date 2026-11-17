@@ -37,9 +37,9 @@
 </script>
 
 {#if first}
-  <div role="dialog" aria-label="Incoming connection request" data-testid="incoming-prompt">
+  <div class="dialog" role="dialog" aria-label="Incoming connection request" data-testid="incoming-prompt">
     <p><TrustBadge verified={false} /> — someone is asking to connect</p>
-    <code data-testid="peer-node-id" style="word-break: break-all">{first.node_id}</code>
+    <code class="selectable" data-testid="peer-node-id">{first.node_id}</code>
     {#if more > 0}<p>+{more} more</p>{/if}
     {#key first.node_id}
       <NicknameForm
@@ -51,6 +51,8 @@
         onSubmit={(nickname) => respond(first.node_id, true, nickname)}
       />
     {/key}
-    <button type="button" disabled={busy} onclick={() => respond(first.node_id, false)}>Decline</button>
+    <div class="dialog-foot">
+      <button type="button" class="btn btn-secondary" disabled={busy} onclick={() => respond(first.node_id, false)}>Decline</button>
+    </div>
   </div>
 {/if}

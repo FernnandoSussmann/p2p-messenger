@@ -21,10 +21,11 @@
 
 <IncomingRequestPrompt />
 <NamingPrompt />
-<div role="tablist">
+<div role="tablist" class="tabs">
   {#each tabs as tab (tab.id)}
     <button
       role="tab"
+      class="tab"
       aria-selected={tab.id === current.id}
       onclick={() => {
         closeChat();

@@ -20,7 +20,7 @@ use core::discovery::{
 };
 use core::identity::{
     AccountId, DbKey, DisplayName, KeychainError, MemorySettingsStore, NodeId, SettingsError,
-    SettingsStore, SqlCipherSettingsStore, Ticket,
+    SettingsStore, SqlCipherSettingsStore, Theme, Ticket,
 };
 use core::storage::{KeySource, Storage};
 use tokio::sync::broadcast::Receiver;
@@ -181,6 +181,12 @@ impl SettingsStore for SqlPresence {
     fn get_relay_url(&self, id: &AccountId) -> Result<Option<String>, SettingsError> {
         self.file.get_relay_url(id)
     }
+    fn get_theme(&self, id: &AccountId) -> Result<Option<Theme>, SettingsError> {
+        self.inner.get_theme(id)
+    }
+    fn set_theme(&self, id: &AccountId, theme: Theme) -> Result<(), SettingsError> {
+        self.inner.set_theme(id, theme)
+    }
     fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError> {
         self.file.set_relay_url(id, url)
     }
@@ -226,6 +232,12 @@ impl SettingsStore for FailingPresence {
     }
     fn get_relay_url(&self, id: &AccountId) -> Result<Option<String>, SettingsError> {
         self.inner.get_relay_url(id)
+    }
+    fn get_theme(&self, id: &AccountId) -> Result<Option<Theme>, SettingsError> {
+        self.inner.get_theme(id)
+    }
+    fn set_theme(&self, id: &AccountId, theme: Theme) -> Result<(), SettingsError> {
+        self.inner.set_theme(id, theme)
     }
     fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError> {
         self.inner.set_relay_url(id, url)

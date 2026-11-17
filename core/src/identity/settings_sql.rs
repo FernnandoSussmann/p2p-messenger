@@ -9,7 +9,7 @@ use rusqlite::{params, OptionalExtension, Transaction};
 use super::settings::LegacySettings;
 use super::{
     validate_display_name, validate_relay_url, AccountId, DisplayName, DisplayNameError,
-    SettingsError, SettingsStore,
+    SettingsError, SettingsStore, Theme,
 };
 use crate::storage::Storage;
 
@@ -23,6 +23,13 @@ CREATE TABLE account_settings (
 );
 ";
 
+pub(crate) const MIGRATION_SETTINGS_THEME: &str = "
+ALTER TABLE account_settings ADD COLUMN theme TEXT
+  CHECK (theme IS NULL OR theme IN ('midnight', 'dark', 'light'));
+";
+
+const SQL_SETTINGS_SET_THEME: &str = "INSERT INTO account_settings (account_id, theme) VALUES (?1, ?2) ON CONFLICT (account_id) DO UPDATE SET theme = excluded.theme";
+const SQL_SETTINGS_GET_THEME: &str = "SELECT theme FROM account_settings WHERE account_id = ?1";
 const SQL_SETTINGS_SET_NAME: &str = "INSERT INTO account_settings (account_id, display_name) VALUES (?1, ?2) ON CONFLICT (account_id) DO UPDATE SET display_name = excluded.display_name";
 const SQL_SETTINGS_SET_PROVISIONED: &str = "INSERT INTO account_settings (account_id, provisioned_at) VALUES (?1, ?2) ON CONFLICT (account_id) DO UPDATE SET provisioned_at = excluded.provisioned_at";
 const SQL_SETTINGS_SET_PRESENCE: &str = "INSERT INTO account_settings (account_id, presence_enabled) VALUES (?1, ?2) ON CONFLICT (account_id) DO UPDATE SET presence_enabled = excluded.presence_enabled";
@@ -120,6 +127,24 @@ impl SettingsStore for SqlCipherSettingsStore {
     fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError> {
         let canonical = url.map(validate_relay_url).transpose()?;
         self.set(id, SQL_SETTINGS_SET_RELAY, canonical)
+    }
+
+    fn get_theme(&self, id: &AccountId) -> Result<Option<Theme>, SettingsError> {
+        let db = self.storage.database(id)?;
+        let conn = db.conn()?;
+        let stored: Option<Option<String>> = conn
+            .query_row(
+                SQL_SETTINGS_GET_THEME,
+                params![id.as_uuid().as_bytes().as_slice()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|_| SettingsError::Unavailable)?;
+        Ok(stored.flatten().and_then(|raw| Theme::parse(&raw).ok()))
+    }
+
+    fn set_theme(&self, id: &AccountId, theme: Theme) -> Result<(), SettingsError> {
+        self.set(id, SQL_SETTINGS_SET_THEME, theme.as_str())
     }
 
     fn discard_new_account(&self, id: &AccountId) -> Result<(), SettingsError> {

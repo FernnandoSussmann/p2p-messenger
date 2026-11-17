@@ -38,20 +38,9 @@
 
 <div class="composer">
   {#if bytes > MAX_BODY_BYTES * 0.9}
-    <p data-testid="byte-counter" class:over={bytes > MAX_BODY_BYTES}>{bytes} / {MAX_BODY_BYTES} bytes</p>
+    <p data-testid="byte-counter" class="hint" class:over={bytes > MAX_BODY_BYTES}>{bytes} / {MAX_BODY_BYTES} bytes</p>
   {/if}
-  <textarea aria-label="Message" rows="3" bind:value={body} {disabled} onkeydown={keydown}></textarea>
-  <button type="button" disabled={!canSend} onclick={send}>Send</button>
-  {#if error}<p role="alert">{error}</p>{/if}
+  <textarea class="textarea" aria-label="Message" rows="3" bind:value={body} {disabled} onkeydown={keydown}></textarea>
+  <button type="button" class="btn btn-primary" disabled={!canSend} onclick={send}>Send</button>
+  {#if error}<p role="alert" class="alert alert-danger">{error}</p>{/if}
 </div>
-
-<style>
-  .composer {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4em;
-  }
-  .over {
-    color: #b00020;
-  }
-</style>

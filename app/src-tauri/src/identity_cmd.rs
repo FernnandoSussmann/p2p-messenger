@@ -11,7 +11,7 @@ use messenger_core::identity::KeychainStore;
 use messenger_core::identity::{
     DisplayNameError, IdentityService, IdentityStatus, KeychainError, LoadError, MarkerError,
     MyInfoError, OsKeychain, ProvisionError, SetNameError, SettingsStore, SqlCipherSettingsStore,
-    StatusError, TicketProvider,
+    StatusError, Theme, ThemeError, TicketProvider,
 };
 use messenger_core::storage::Storage;
 use serde::Serialize;
@@ -47,6 +47,11 @@ pub struct MyInfoDto {
     pub qr_svg: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ThemeDto {
+    pub theme: &'static str,
+}
+
 /// Which validation rule a display name broke.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DisplayNameKind {
@@ -77,6 +82,7 @@ pub enum IdentityCmdError {
     RecoverableErrorState { reason: String },
     KeychainAccessDenied,
     InvalidDisplayName { kind: DisplayNameKind },
+    InvalidTheme,
     Internal,
 }
 
@@ -120,6 +126,17 @@ impl From<SetNameError> for IdentityCmdError {
             SetNameError::Invalid(e) => Self::InvalidDisplayName { kind: e.into() },
             SetNameError::Marker(MarkerError::Corrupt) => StatusError::MarkerCorrupt.into(),
             SetNameError::NotProvisioned | SetNameError::Marker(_) | SetNameError::Settings(_) => {
+                Self::Internal
+            }
+        }
+    }
+}
+
+impl From<ThemeError> for IdentityCmdError {
+    fn from(err: ThemeError) -> Self {
+        match err {
+            ThemeError::Marker(MarkerError::Corrupt) => StatusError::MarkerCorrupt.into(),
+            ThemeError::NotProvisioned | ThemeError::Marker(_) | ThemeError::Settings(_) => {
                 Self::Internal
             }
         }
@@ -185,6 +202,26 @@ pub fn my_info<K: KeychainStore, S: SettingsStore, T: TicketProvider>(
     })
 }
 
+pub fn theme_get<K: KeychainStore, S: SettingsStore, T: TicketProvider>(
+    service: &IdentityService<K, S, T>,
+) -> Result<ThemeDto, IdentityCmdError> {
+    Ok(ThemeDto {
+        theme: service.theme()?.as_str(),
+    })
+}
+
+/// Parses before touching the service: a bad value changes nothing.
+pub fn theme_set<K: KeychainStore, S: SettingsStore, T: TicketProvider>(
+    service: &IdentityService<K, S, T>,
+    raw: &str,
+) -> Result<ThemeDto, IdentityCmdError> {
+    let theme = Theme::parse(raw).map_err(|_| IdentityCmdError::InvalidTheme)?;
+    service.set_theme(theme)?;
+    Ok(ThemeDto {
+        theme: theme.as_str(),
+    })
+}
+
 #[tauri::command]
 pub fn identity_status(service: State<'_, AppIdentity>) -> StatusDto {
     status(&service)
@@ -219,6 +256,21 @@ pub fn identity_set_display_name(
 #[tauri::command]
 pub fn identity_my_info(service: State<'_, AppIdentity>) -> Result<MyInfoDto, IdentityCmdError> {
     my_info(&service)
+}
+
+#[tauri::command]
+pub fn identity_theme_get(service: State<'_, AppIdentity>) -> Result<ThemeDto, IdentityCmdError> {
+    theme_get(&service)
+}
+
+/// `theme` arrives as a string so a bad value is the typed `InvalidTheme`,
+/// not Tauri's generic argument-deserialisation error.
+#[tauri::command]
+pub fn identity_theme_set(
+    service: State<'_, AppIdentity>,
+    theme: String,
+) -> Result<ThemeDto, IdentityCmdError> {
+    theme_set(&service, &theme)
 }
 
 #[cfg(test)]
@@ -385,6 +437,44 @@ mod tests {
     }
 
     #[test]
+    fn theme_defaults_round_trips_and_rejects_bad_values() {
+        let (service, _kc, _dir) = setup();
+        provision(&service).unwrap();
+        assert_eq!(theme_get(&service).unwrap().theme, "midnight");
+        assert_eq!(theme_set(&service, "light").unwrap().theme, "light");
+        assert_eq!(theme_get(&service).unwrap().theme, "light");
+        for bad in [
+            "Dark",
+            " dark",
+            "light ",
+            "",
+            "system",
+            "dark'--",
+            "midnight'; DROP TABLE x;--",
+        ] {
+            assert_eq!(
+                theme_set(&service, bad).unwrap_err(),
+                IdentityCmdError::InvalidTheme
+            );
+        }
+        assert_eq!(theme_get(&service).unwrap().theme, "light");
+        assert_eq!(
+            serde_json::to_string(&IdentityCmdError::InvalidTheme).unwrap(),
+            r#"{"type":"InvalidTheme"}"#
+        );
+    }
+
+    #[test]
+    fn theme_without_identity_is_internal() {
+        let (service, _kc, _dir) = setup();
+        assert_eq!(theme_get(&service).unwrap_err(), IdentityCmdError::Internal);
+        assert_eq!(
+            theme_set(&service, "dark").unwrap_err(),
+            IdentityCmdError::Internal
+        );
+    }
+
+    #[test]
     fn first_run_flow_end_to_end() {
         let (service, _kc, _dir) = setup();
         assert!(matches!(status(&service), StatusDto::Absent));
@@ -445,6 +535,40 @@ mod tests {
         );
         assert!(dir.path().join(messenger_core::storage::DB_FILE).exists());
         assert!(!dir.path().join("settings.json").exists());
+    }
+
+    #[test]
+    fn theme_persists_across_rebuilt_encrypted_service() {
+        use messenger_core::identity::SqlCipherSettingsStore;
+
+        type EncryptedService =
+            IdentityService<Arc<FakeKeychain>, SqlCipherSettingsStore, NodeIdTicketProvider>;
+        let dir = tempfile::tempdir().unwrap();
+        let keychain = Arc::new(FakeKeychain::new());
+        let build = || -> EncryptedService {
+            let storage = Arc::new(Storage::new(dir.path(), keychain.clone()));
+            IdentityService::new(
+                keychain.clone(),
+                SqlCipherSettingsStore::new(storage),
+                NodeIdTicketProvider,
+                dir.path(),
+            )
+        };
+
+        let service = build();
+        provision(&service).unwrap();
+        assert_eq!(theme_get(&service).unwrap().theme, "midnight");
+        assert_eq!(theme_set(&service, "light").unwrap().theme, "light");
+        for bad in ["light ", "midnight'; DROP TABLE x;--"] {
+            assert_eq!(
+                theme_set(&service, bad).unwrap_err(),
+                IdentityCmdError::InvalidTheme
+            );
+        }
+        drop(service);
+
+        let restarted = build();
+        assert_eq!(theme_get(&restarted).unwrap().theme, "light");
     }
 
     #[test]

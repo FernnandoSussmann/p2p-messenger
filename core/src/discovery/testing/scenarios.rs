@@ -17,7 +17,7 @@ use crate::contacts::{accept_incoming, Nickname, NoMessageStore, SqlCipherContac
 use crate::discovery::event_json;
 use crate::identity::{
     AccountId, DbKey, DisplayName, KeychainError, MemorySettingsStore, SettingsError,
-    SettingsStore, SqlCipherSettingsStore,
+    SettingsStore, SqlCipherSettingsStore, Theme,
 };
 use crate::storage::{KeySource, Storage};
 
@@ -192,6 +192,12 @@ impl SettingsStore for SqlPresence {
     }
     fn get_relay_url(&self, id: &AccountId) -> Result<Option<String>, SettingsError> {
         self.inner.get_relay_url(id)
+    }
+    fn get_theme(&self, id: &AccountId) -> Result<Option<Theme>, SettingsError> {
+        self.inner.get_theme(id)
+    }
+    fn set_theme(&self, id: &AccountId, theme: Theme) -> Result<(), SettingsError> {
+        self.inner.set_theme(id, theme)
     }
     fn set_relay_url(&self, id: &AccountId, url: Option<&str>) -> Result<(), SettingsError> {
         self.inner.set_relay_url(id, url)

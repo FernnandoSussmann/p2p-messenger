@@ -5,9 +5,9 @@
   let open = $state(false);
 </script>
 
-<div class="node-id-line">
+<div class="stack">
   <small class="node-id" title={nodeId} data-testid="node-id-short">{shortNodeId(nodeId)}</small>
-  <button type="button" class="link" aria-expanded={open} onclick={() => (open = !open)}>
+  <button type="button" class="btn btn-ghost btn-sm" aria-expanded={open} onclick={() => (open = !open)}>
     {open ? "Hide full NodeId" : "Show full NodeId"}</button
   >
   {#if open}
@@ -15,14 +15,3 @@
     <small class="hint">Select it and use your system's copy shortcut.</small>
   {/if}
 </div>
-
-<style>
-  .node-id {
-    color: gray;
-    font-size: 0.8em;
-  }
-  .selectable {
-    user-select: all;
-    word-break: break-all;
-  }
-</style>

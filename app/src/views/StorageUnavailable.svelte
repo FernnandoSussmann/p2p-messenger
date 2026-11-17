@@ -18,9 +18,9 @@
   }
 </script>
 
-<section role="alert" aria-labelledby="storage-title">
+<section role="alert" class="alert alert-danger stack" aria-labelledby="storage-title">
   <h2 id="storage-title">Encrypted storage unavailable</h2>
   <p>{current}</p>
   <p>Your messages, contacts and settings were not deleted, reset or replaced.</p>
-  <button type="button" disabled={busy} onclick={retry}>Retry</button>
+  <button type="button" class="btn btn-primary" disabled={busy} onclick={retry}>Retry</button>
 </section>

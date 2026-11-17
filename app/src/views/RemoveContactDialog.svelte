@@ -30,13 +30,13 @@
   }
 </script>
 
-<div role="dialog" aria-label="Remove contact">
+<div class="dialog" role="dialog" aria-label="Remove contact">
   <p><strong>Remove “<bdi>{contact.nickname}</bdi>”?</strong></p>
   <p>
     They will no longer be a contact. If they connect again, you will be asked to Accept or Decline
     them like someone new. Any open connection with them is closed now.
   </p>
-  <label>
+  <label class="check">
     <input type="checkbox" bind:checked={eraseHistory} />
     <strong>Also delete our message history with “<bdi>{contact.nickname}</bdi>”</strong>
   </label>
@@ -46,9 +46,11 @@
   {:else}
     <p>Your message history with them will be <strong>kept</strong>.</p>
   {/if}
-  {#if error}<p role="alert">{error}</p>{/if}
-  <button type="button" disabled={busy} onclick={confirm}>
-    {eraseHistory ? "Remove contact and delete history" : "Remove contact"}
-  </button>
-  <button type="button" onclick={onCancel}>Cancel</button>
+  {#if error}<p role="alert" class="alert alert-danger">{error}</p>{/if}
+  <div class="dialog-foot">
+    <button type="button" class="btn btn-secondary" onclick={onCancel}>Cancel</button>
+    <button type="button" class="btn btn-danger" disabled={busy} onclick={confirm}>
+      {eraseHistory ? "Remove contact and delete history" : "Remove contact"}
+    </button>
+  </div>
 </div>

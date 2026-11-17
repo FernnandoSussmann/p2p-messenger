@@ -22,7 +22,12 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         label: "legacy_imports",
         sql: super::legacy::MIGRATION_LEGACY_IMPORTS,
     },
+    Migration {
+        version: 5,
+        label: "settings_theme",
+        sql: crate::identity::MIGRATION_SETTINGS_THEME,
+    },
 ];
 
 /// Must equal `MIGRATIONS.last().version` (unit-tested).
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
