@@ -22,11 +22,12 @@ only once they carry real code — no empty stubs or placeholder modules.
 
 ## Run the app
 
-Requires Rust 1.95 or newer (the workspace MSRV), Node.js 20+, and the [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/)
-(on Debian/Ubuntu: `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev`).
+Requires Rust 1.95 or newer (the workspace MSRV), Node.js 20+, and the [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/).
 A C compiler, `perl` and `make` are also required: SQLCipher and a vendored
-OpenSSL are compiled from source (on Windows, install Strawberry Perl). The
-first build takes a few minutes.
+OpenSSL are compiled from source (on Windows, install Strawberry Perl). See
+[Installing the prerequisites](#installing-the-prerequisites) for the
+`apt`, `dnf`, `pacman`, Homebrew and `winget` commands. The first build takes a
+few minutes.
 
 ```sh
 npm start
@@ -284,7 +285,68 @@ npm run release
 
 Prerequisites: Rust 1.95+, Node.js 20+, and per OS: on Linux the WebKitGTK 4.1,
 GTK 3 and libsoup 3 dev packages plus `pkg-config` and binutils; on macOS the
-Xcode command line tools; on Windows the MSVC Build Tools.
+Xcode command line tools; on Windows the MSVC Build Tools. SQLCipher and
+OpenSSL are compiled from source, so every OS also needs a C compiler, `perl`
+and `make`. The script's preflight checks these and names any that are missing.
+
+#### Installing the prerequisites
+
+**Rust** (all OSes): install with [rustup](https://rustup.rs). Distribution
+`rustc` packages are usually older than 1.95.
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Linux / macOS
+rustup update stable
+```
+
+**Node.js 20+**: distribution packages are often older (Ubuntu 22.04 ships 12,
+Debian 12 ships 18). Check with `node --version`. If it is too old, use the
+installer from [nodejs.org](https://nodejs.org) or a version manager such as
+`nvm` or `fnm`.
+
+**Debian / Ubuntu / Linux Mint (`apt`):**
+
+```sh
+sudo apt update
+sudo apt install build-essential perl pkg-config binutils curl \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libdbus-1-dev
+```
+
+**Fedora / RHEL family (`dnf`; `yum` is an alias for it on current RHEL):**
+
+```sh
+sudo dnf install gcc gcc-c++ make perl pkgconf-pkg-config binutils curl \
+  webkit2gtk4.1-devel gtk3-devel libsoup3-devel dbus-devel
+```
+
+Install the full `perl` package, not just `perl-interpreter`: the OpenSSL build
+needs its standard modules. WebKitGTK 4.1 is not packaged on older releases
+such as RHEL 8.
+
+**Arch Linux (`pacman`):**
+
+```sh
+sudo pacman -S --needed base-devel perl curl webkit2gtk-4.1 gtk3 libsoup3 dbus
+```
+
+**macOS (Homebrew):**
+
+```sh
+xcode-select --install   # C compiler, make, perl, otool
+brew install node
+```
+
+**Windows (`winget`, in PowerShell):**
+
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install Rustlang.Rustup
+winget install OpenJS.NodeJS.LTS
+winget install StrawberryPerl.StrawberryPerl
+```
+
+The WebView2 runtime is preinstalled on Windows 10/11. Open a new terminal
+after installing so the new `PATH` takes effect.
 
 The script runs `npm ci` and `tauri build --no-bundle --ci -- --locked` in a
 throwaway temp target dir (with build paths remapped), then checks the binary:
