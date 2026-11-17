@@ -6,6 +6,7 @@
   import { startChatEvents } from "../lib/chatStore";
   import type { Component } from "svelte";
   import Chat from "./Chat.svelte";
+  import ContactInfo from "./ContactInfo.svelte";
   import Contacts from "./Contacts.svelte";
   import Discover from "./Discover.svelte";
   import IncomingRequestPrompt from "./IncomingRequestPrompt.svelte";
@@ -89,6 +90,8 @@
     </div>
   {:else if $screen.kind === "chat"}
     <Chat nodeId={$screen.nodeId} onBack={back} />
+  {:else if $screen.kind === "contact-info"}
+    <ContactInfo nodeId={$screen.nodeId} />
   {/if}
 </div>
 {#if current}

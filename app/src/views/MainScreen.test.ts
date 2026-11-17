@@ -37,6 +37,7 @@ vi.mock("../lib/contactsStore", async () => {
   return {
     contacts: writable([]),
     contactsError: writable(null),
+    contactsNotice: writable<string | null>(null),
     namingQueue,
     dropNaming: vi.fn(),
     refreshContacts: vi.fn(async () => {}),
@@ -53,15 +54,16 @@ vi.mock("../lib/chatStore", async () => {
     openChat: vi.fn(),
     loadOlder: vi.fn(),
     sendMessage: vi.fn(),
+    resetConversation: vi.fn(),
     resendMessage: vi.fn(),
   };
 });
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 
 import MainScreen from "./MainScreen.svelte";
-import { screen as routerScreen, showChat, showTab } from "../lib/router";
+import { screen as routerScreen, showChat, showContactInfo, showTab } from "../lib/router";
 import { incomingRequests, connections } from "../lib/netStore";
-import { startContacts } from "../lib/contactsStore";
+import { contacts, startContacts } from "../lib/contactsStore";
 import { startChatEvents } from "../lib/chatStore";
 import { identityMyInfo } from "../identity";
 import { netMyTicket, netPendingIncoming } from "../net";
@@ -72,6 +74,7 @@ beforeEach(() => {
   unlistenContacts.mockClear();
   unlistenChat.mockClear();
   showTab("contacts");
+  contacts.set([{ node_id: "peer-1", nickname: "Pat", self_name: null, verified: false, added_at_ms: 0, last_seen_ms: null }]);
   namingQueue.set([]);
   incomingRequests.set([]);
   connections.set({});
@@ -207,6 +210,20 @@ describe("MainScreen", () => {
     await fireEvent.click(back);
     expect(get(routerScreen)).toEqual({ kind: "tab", tab: "contacts" });
     expect(await screen.findByRole("tablist")).toBeTruthy();
+  });
+
+  it("contact_info_screen_replaces_menu_and_footer_but_keeps_prompts", async () => {
+    namingQueue.set([{ node_id: "peer-9", self_name: "Eve", nickname: "Eve" }]);
+    contacts.set([{ node_id: "peer-1", nickname: "Bob", self_name: null, verified: false, added_at_ms: 0, last_seen_ms: null }]);
+    render(MainScreen);
+    showContactInfo("peer-1");
+    const back = await screen.findByRole("button", { name: "Back" });
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByText("p2p-messenger")).toBeNull();
+    expect(screen.getByTestId("naming-prompt")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(back));
+    await fireEvent.click(back);
+    expect(get(routerScreen)).toEqual({ kind: "chat", nodeId: "peer-1" });
   });
 
   it("chat_events_started_and_unlistened", async () => {

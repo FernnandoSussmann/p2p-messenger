@@ -37,4 +37,12 @@ describe("contact-info", () => {
     back();
     expect(get(screen)).toEqual({ kind: "tab", tab: "contacts" });
   });
+
+  it("showTab from contact-info clears the drill-in", () => {
+    showContactInfo("abc");
+    showTab("network");
+    expect(get(screen)).toEqual({ kind: "tab", tab: "network" });
+    back();
+    expect(get(screen)).toEqual({ kind: "tab", tab: "contacts" });
+  });
 });

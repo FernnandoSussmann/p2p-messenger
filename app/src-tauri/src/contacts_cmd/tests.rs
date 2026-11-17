@@ -540,6 +540,47 @@ async fn remove_with_erase_clears_chat_history_end_to_end() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn remove_keep_then_readd_restores_history_end_to_end() {
+    let (a, b) = (
+        started_with_chat("Alice").await,
+        started_with_chat("Bob").await,
+    );
+    connect_pair(&a, &b).await;
+    let peer = b.id.to_string();
+    let log = ChatLog::record(&a.messaging);
+    let mut sent_ids = Vec::new();
+    for body in ["one", "two"] {
+        let sent = crate::chat_cmd::send(&a.chat, &peer, body.into())
+            .await
+            .unwrap();
+        log.wait_status(&sent.id, "delivered").await;
+        sent_ids.push(sent.id);
+    }
+
+    remove(&a.contacts, &a.state, &a.chat, &peer, None)
+        .await
+        .unwrap();
+    // Not a contact any more (the UI shows no row or conversation) ...
+    let listed = list(&a.contacts).await.unwrap();
+    assert!(listed.iter().all(|c| c.node_id != peer));
+    // ... but the rows are still stored.
+    let kept = crate::chat_cmd::history(&a.chat, &peer, None, None)
+        .await
+        .unwrap();
+    assert_eq!(kept.messages.len(), 2);
+
+    add(&a.contacts, &a.state, &peer, "Bobby").await.unwrap();
+    let page = crate::chat_cmd::history(&a.chat, &peer, None, None)
+        .await
+        .unwrap();
+    let mut got: Vec<_> = page.messages.iter().map(|m| m.id.clone()).collect();
+    got.sort();
+    sent_ids.sort();
+    assert_eq!(got, sent_ids);
+    assert!(page.messages.iter().all(|m| m.status == "delivered"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn remove_contact_fails_queued_messages() {
     let (a, b) = (
         started_with_chat("Alice").await,

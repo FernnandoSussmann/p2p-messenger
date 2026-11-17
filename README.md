@@ -80,25 +80,55 @@ unset, and My Info asks for a new one.
 NAT traversal (hole punching, relay fallback) is provided by iroh; this app
 adds no traversal logic of its own. Relays only ever carry ciphertext.
 
+### Screens and themes
+
+The visual spec is the reference sheet [`design/visual-identity.html`](design/visual-identity.html)
+(components in all three themes).
+
+- **Themes:** Midnight (default), Dark and Light. You pick one on the one-screen
+  setup (name and theme) and can change it any time on **My Info**. It is stored
+  per account in `messenger.db`, so each `--profile` keeps its own.
+- **Screen structure:** setup lands on **Contacts**. The menu has four tabs:
+  **Contacts**, **Discover**, **Network** and **My Info**. Drill-in screens hide the
+  menu: Contacts -> a contact -> conversation -> the ⋮ menu's **Contact info**.
+  **Back** goes from contact info to the conversation and from the conversation to
+  Contacts; any menu tab clears the drill-in.
+- **Where each per-contact action lives:**
+
+  | Action | Where |
+  | --- | --- |
+  | Open the conversation | click the contact row |
+  | Unread count | the "N unread" chip on the row |
+  | Rename (pencil), Remove (trash) | contact info |
+  | Verify / unverify | contact info |
+  | Connect (LAN contacts), connection state | contact info (state also on the row and in the conversation header) |
+  | Search, Clear history | contact info |
+  | Add a contact from the LAN | Discover (nickname, then **Add contact and connect**) |
+
 ### Contacts
 
-**Contacts** is the default tab. Each row shows only your own nickname (bold),
-with the NodeId small and gray beneath it. What a peer calls itself appears only
-in the Accept, naming and rename prompts, never in the list.
+**Contacts** is the default tab. Each row is one button that opens the
+conversation. It shows the trust badge, your own nickname (bold), the connection
+as `direction | state | reason` (or "Not connected"), and an "N unread" chip. It
+has no action buttons. What a peer calls itself appears only in the Accept,
+naming and rename prompts and in contact info, never in the list.
 
 - **Unverified** vs **Verified by you**: the latter is your own attestation
-  (**Mark verified…**, undo with **Mark unverified**). The app does not check it
-  cryptographically.
-- **Rename** changes only your nickname. **Connect** appears for contacts
-  currently on the local network; they reconnect without a prompt.
+  (**Mark verified…**, undo with **Mark unverified**, both in contact info). The app
+  does not check it cryptographically.
+- **Rename** (pencil in contact info) changes only your nickname. **Connect**
+  appears in contact info for contacts currently on the local network; they
+  reconnect without a prompt.
 - Names may contain emoji sequences (👨‍👩‍👧, 🏳️‍🌈, 🏴󠁧󠁢󠁥󠁮󠁧󠁿) but not stray
   zero-width characters.
-- **Remove…** always removes trust and closes any open connection, so their
-  next connect prompts again. Your message history is deleted only if you tick
+- **Remove** (trash in contact info) always removes trust and closes any open
+  connection, so their next connect prompts again, then returns to Contacts with
+  a notice. Your message history is deleted only if you tick
   "Also delete our message history" (off by default). Ticking it deletes the
-  stored messages with that contact from the encrypted message database.
-- Copying a NodeId: choose **Show full NodeId**, select it and use your
-  system's copy shortcut.
+  stored messages with that contact from the encrypted message database. If you
+  keep it, the conversation is no longer shown anywhere; it comes back if you
+  re-add the same contact (same NodeId).
+- Copying a NodeId: in contact info select it and use your system's copy shortcut.
 - Contacts, including nicknames, are stored encrypted in `messenger.db`.
 
 ### Encrypted storage
@@ -160,8 +190,11 @@ Deleting the log folder is a privacy action and is safe at any time.
 
 ### Chat
 
-Open **Contacts**, then a contact row's **Message** button. **Back** (or any tab)
-returns to the tabs; an unread count shows on the button while the chat is closed.
+Open **Contacts**, then click a contact row. **Back** (or any tab) returns to the
+tabs; an "N unread" chip shows on the row while the chat is closed. Outgoing
+bubbles read "You"; incoming bubbles show *sent | received* times. The header
+has Back, the name, the trust badge, the connection text and a ⋮ menu with
+**Contact info**.
 Commands: `chat_send`, `chat_resend`, `chat_history`, `history_search` and `history_clear`; events:
 `message_received`, `message_status` and `chat_resync`.
 
@@ -178,16 +211,17 @@ Commands: `chat_send`, `chat_resend`, `chat_history`, `history_search` and `hist
   time zone.
 - Text is shown literally: no links or formatting, and hidden direction,
   zero-width or control characters show as �.
-- Search within a conversation finds words in its history. History and search
+- Search (in contact info) finds words in that conversation's history. History and search
   read the encrypted store, so they work even if the node failed to start.
   Storage is `messenger.db` (see Encrypted storage).
-- **Clear history…** (in the chat header, also for removed contacts) deletes the
+- **Clear history…** (in contact info) deletes the
   whole conversation after a confirmation. The messages are removed from this
   device's encrypted database and the space they used is overwritten. This cannot
   remove the other person's copy, backups or snapshots of this computer, or
   traces some storage hardware (such as SSDs) may keep. Messages still waiting to
   be sent are marked Not delivered. Remove contact with "Also delete our message
-  history" uses the same path.
+  history" uses the same path. A removed contact's conversation is hidden (no
+  row, chip or search result) and returns if the same contact is re-added.
 
 ### On this network, presence and relay
 
@@ -395,7 +429,8 @@ flow is automated at command-invoke level (`first_run_flow_end_to_end` in
 `app/src-tauri/src/chat_cmd/tests.rs`), the storage screen flows
 (`app/src-tauri/src/storage_cmd/tests.rs`: `wrong_key_surfaces_error_and_keeps_file`,
 `retry_recovers_after_key_restored`), `history_clear_end_to_end` and
-`remove_with_erase_clears_chat_history_end_to_end`, and component level
+`remove_with_erase_clears_chat_history_end_to_end`,
+`remove_keep_then_readd_restores_history_end_to_end`, and component level
 (vitest). Check by
 hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
 
@@ -425,44 +460,43 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
     to you still works. Turn it on: you reappear with your current name.
 11. Rename yourself while visible: the other instance shows the new name.
 12. Contacts is the default tab; the empty state shows with no contacts.
-13. The Accept prompt's nickname is prefilled with their name (or "Peer <id>") and is editable; clearing it disables Accept. After Accept, the row shows only the bold nickname, the gray truncated
-    NodeId and Unverified; the peer's own name is not in the row. Hovering shows
-    the full NodeId; Show full NodeId reveals selectable text and Ctrl/Cmd+C
-    copies it.
+13. The Accept prompt's nickname is prefilled with their name (or "Peer <id>") and is editable; clearing it disables Accept. After Accept, the row shows the Unverified badge and the bold nickname;
+    the peer's own name is not in the row. Contact info
+    shows the full NodeId as selectable text, and Ctrl/Cmd+C copies it.
 14. Ticket connect: once the other side accepts, the naming prompt appears
     prefilled with their name. Not now leaves them in Contacts as Unverified
     under that name.
-15. Rename changes only the nickname. Mark verified shows the honest dialog and
+15. In contact info, rename (pencil) changes only the nickname. Mark verified shows the honest dialog and
     the badge reads "Verified by you"; Mark unverified reverts it.
-16. Remove: the checkbox is unchecked by default and both outcomes are shown.
+16. Remove (trash in contact info): the checkbox is unchecked by default and both outcomes are shown.
     After removal the connection drops and the peer's next connect prompts.
 17. The peer renames itself and reconnects: your nickname for them is unchanged.
 18. Reconnect silently: quit and relaunch both instances. On B, open Contacts;
-    A's row shows Connect. Click it: A shows no Accept prompt and both show
+    open A's contact info and click Connect: A shows no Accept prompt and both show
     Connected on A's contact row. Repeat by pasting A's ticket into B's
     Network tab, again with no prompt on A.
 19. `MESSENGER_PROFILE=../x` or `MESSENGER_RELAY_URL=bad` refuses to start.
-20. Contacts -> **Message** opens the chat. **Back**, or any tab, returns to the tabs.
+20. Contacts -> clicking the contact row opens the chat. **Back**, or any tab, returns to the tabs.
 21. With both instances connected, multi-line + emoji text arrives once. The
     sender shows Sending -> Delivered, and times are local.
 22. Quit B and send from A: the message is **Pending**, and the not-connected
     note explains the reconnect. Relaunch B and Connect: it becomes Delivered,
     and B shows it once.
-23. An unread count appears on B's Message button while B's chat is closed, and
+23. An "N unread" chip appears on B's contact row while B's chat is closed, and
     clears when the chat opens.
 24. Send `<b>x</b>`, `**x**`, `https://example.com`, a text containing U+202E,
     and a Persian word containing ZWNJ. All appear literally and nothing is
     clickable. The U+202E shows as �, and the Persian word renders correctly.
 25. Restart A: the history reloads with its persisted statuses, the newest is at
     the bottom, and **Load older** pages back.
-26. Search in the chat finds a word, and only from this conversation.
-27. Remove the contact with "Also delete our message history", then re-add it:
-    the chat is empty. Without the option, the history remains. Queued Pending
-    messages for a removed contact show Not delivered.
-    Clear history… while connected empties your chat and search, and the peer's
-    history is unchanged. Clear history… of a removed contact works too, and
-    search then finds nothing. `grep -c <cleared word> <profile data dir>/messenger.db`
-    returns 0.
+26. Search in contact info finds a word, and only from this conversation.
+27. Remove a contact keeping history: their conversation is no longer shown;
+    re-add the same NodeId: the old messages are back. With "Also delete our
+    message history" the re-added chat is empty. Queued Pending messages for a
+    removed contact show Not delivered.
+    Clear history… in contact info while connected empties your chat and search,
+    and the peer's history is unchanged; after **Back** the conversation is empty.
+    `grep -c <cleared word> <profile data dir>/messenger.db` returns 0.
 28. Empty or whitespace input keeps Send disabled. A paste over 16 KiB disables
     Send and shows the counter.
 29. `grep -c "<a word you sent>" <profile data dir>/messenger.db` returns 0 (the
@@ -483,6 +517,18 @@ hand with `cd app && npm run tauri dev` on a fresh profile and empty keychain:
     and `contacts.json` are gone from the data dir, and no new prompts appear
     for accepted peers. A `known_peers.json` that could not be parsed may
     remain; it is plaintext and can be deleted.
+35. Fresh profile: setup is Midnight; the arrow appears only after typing; picking
+    Light repaints instantly and Continue lands on Contacts in Light. Relaunch opens
+    Contacts in Light; a second `--profile` keeps its own theme.
+36. Switch all three themes on My Info: every tab, dialog, badge and bubble is readable.
+37. Keyboard only: menu arrows, picker arrows, row Enter, ⋮, Back; the focus ring is
+    visible in every theme.
+38. Two instances via Discover: add and connect; the row shows `outbound | connected`;
+    the conversation shows "You" and *sent | received*; ⋮ opens contact info.
+39. Stop the peer: the row shows the state and reason, and the conversation shows
+    the edited not-connected sentence.
+40. A pending incoming request stays visible on every tab, in the chat and in
+    contact info.
 
 ## Two-device simulation
 

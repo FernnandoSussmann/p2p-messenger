@@ -10,7 +10,6 @@ a new `lib/theme.ts`, every `app/src/views/*.svelte` (restyled, several re-laid 
 `ContactInfo.svelte`, their `*.test.ts`, the frontend guard tests, `README.md`, and the removal of `design/wireframes/`
 **Wire format:** unchanged — no `PROTOCOL_VERSION` bump. The theme never leaves the device.
 **Reference:** [`design/visual-identity.html`](../design/visual-identity.html) (approved component sheet, three themes; kept)
-**Wireframes:** `design/wireframes/` — **temporary**: inputs to this doc, deleted as part of its definition of done.
 Every layout decision they carried is written down below, so this doc stands on its own once they are gone.
 **Followed by:** [DD-08 Outgoing Delivery Time](08-outgoing-delivery-time.md) (adds the delivered time to the
 outgoing bubbles designed here)
